@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>ko</string>
+	<key>CFBundleExecutable</key>
+	<string>WiFiLock</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.wifilock.WiFiLock</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>WiFiLock</string>
+	<key>CFBundleDisplayName</key>
+	<string>와이파이 잠금</string>
+	<key>LSHasLocalizedDisplayName</key>
+	<true/>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSLocationUsageDescription</key>
+	<string>현재 연결된 와이파이 이름을 확인해 네트워크별 잠금 시간을 적용하는 데 사용합니다. 위치 정보는 저장하거나 밖으로 보내지 않습니다.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>현재 연결된 와이파이 이름을 확인해 네트워크별 잠금 시간을 적용하는 데 사용합니다. 위치 정보는 저장하거나 밖으로 보내지 않습니다.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>와이파이 연결 상태에 따라 자동 잠금 시간을 조절합니다.</string>
+</dict>
+</plist>

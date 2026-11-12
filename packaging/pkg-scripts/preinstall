@@ -1,0 +1,5 @@
+#!/bin/sh
+# 설치 전에 실행 중인 와이파이 잠금 앱을 끈다 (파일 교체 중 충돌 방지)
+/usr/bin/pkill -x WiFiLock 2>/dev/null || true
+sleep 1
+exit 0

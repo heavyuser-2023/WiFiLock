@@ -1,0 +1,13 @@
+# 빌드 결과
+.build/
+build/
+dist/
+
+# 엑스코드가 만드는 파일
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+
+# 맥 시스템 파일
+.DS_Store
