@@ -2,6 +2,7 @@
 fn main() {
     let p = wifilock_platform::create();
     println!("운영체제: {}", p.os());
+    println!("시계: {:?}", wifilock_platform::clocks());
     println!("자리비움: {:?}", p.idle_seconds());
     println!("잠김: {}", p.screen_locked());
     println!("화면 유지 요청: {:?}", p.display_sleep_preventers());

@@ -498,6 +498,24 @@ impl SelfTest {
         });
         self.check("설정 창에서 이름으로 네트워크 추가", added, "");
 
+        // 삭제 단추에 초점이 있는 채로도 목록이 바로 다시 그려져야 한다 (윈도우·리눅스 웹뷰는 누른 단추로 초점이 옮겨 감)
+        self.eval_settings("window.wifilockTest && window.wifilockTest.deleteByName('SelfTestOffice')");
+        let removed = wait_until(Duration::from_secs(10), || {
+            !lock(&st.store).settings().rules.iter().any(|r| r.ssid.as_deref() == Some("SelfTestOffice"))
+        });
+        self.check("설정 창에서 네트워크 삭제", removed, "");
+        let expected = lock(&st.store).settings().rules.len() as u64;
+        let mut shown = None;
+        let redrawn = wait_until(Duration::from_secs(10), || {
+            *lock(&st.page_report) = None;
+            self.eval_settings("window.wifilockTest && window.wifilockTest.report('after-delete')");
+            let got = wait_until(Duration::from_secs(2), || lock(&st.page_report).is_some());
+            let r = lock(&st.page_report).clone().unwrap_or_default();
+            shown = r.get("ruleCount").and_then(|v| v.as_u64());
+            got && shown == Some(expected)
+        });
+        self.check("삭제 뒤 설정 창 목록 갱신", redrawn, format!("화면 {shown:?}개 / 저장 {expected}개"));
+
         let a = self.app.clone();
         main_sync(&self.app, move || {
             if let Some(w) = a.get_webview_window(views::SETTINGS) {
@@ -522,7 +540,7 @@ impl SelfTest {
             return;
         };
         let reopened = SettingsStore::open(&path).settings().clone();
-        self.check("설정 저장·불러오기", reopened == current && reopened.rules.len() >= 2, format!("{}", path.display()));
+        self.check("설정 저장·불러오기", reopened == current && !reopened.rules.is_empty(), format!("{}", path.display()));
         let _ = self.app.state::<std::sync::Arc<crate::state::AppState>>();
     }
 }

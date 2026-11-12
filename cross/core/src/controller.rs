@@ -10,8 +10,9 @@ use crate::Timestamp;
 /// 일시 중지: None = 중지 아님, Some(None) = 다시 시작할 때까지, Some(Some(t)) = t 까지
 pub type PauseState = Option<Option<Timestamp>>;
 
-/// 시간 간격이 이보다 크면 컴퓨터가 잠자기에서 깨어난 것으로 본다.
-const WAKE_GAP_SECONDS: f64 = 30.0;
+/// 두 단조 시계의 차이가 이보다 많이 벌어지면 그 사이 컴퓨터가 잠자기에 있었던 것으로 본다.
+/// (판단이 늦어진 것만으로는 두 시계가 함께 흐르므로 벌어지지 않는다)
+const SLEEP_GAP_SECONDS: f64 = 5.0;
 
 /// 화면에 보여 줄 현재 상황
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -43,7 +44,12 @@ impl Default for LockStatus {
 /// 매 초 운영체제에서 읽어 넘겨주는 값
 #[derive(Debug, Clone)]
 pub struct SystemInputs {
+    /// 판단에 쓰는 시각: 잠자기 동안에도 흐르는 단조 시계 (초). 사용자가 시각을 바꿔도 흔들리지 않는다.
     pub now: Timestamp,
+    /// 깨어 있던 시간만 세는 단조 시계 (초). `now` 와의 차이가 벌어지면 잠자기에서 깨어난 것이다.
+    pub awake: f64,
+    /// 화면에 보여 줄 벽시계 시각 (일시 중지 끝나는 시각 표시용)
+    pub wall: Timestamp,
     /// 마지막 입력 후 지난 초. 이 컴퓨터에서 읽을 수 없으면 None.
     pub idle_seconds: Option<f64>,
     /// 화면이 잠겨 있거나 이 사용자 세션이 화면 앞에 없음
@@ -72,7 +78,8 @@ pub struct Controller {
     status: LockStatus,
     override_timeout: Option<i64>,
     last_screen_locked: Option<bool>,
-    last_tick_at: Option<Timestamp>,
+    /// 지난 판단 때의 (now, awake)
+    last_clocks: Option<(Timestamp, f64)>,
 }
 
 impl Controller {
@@ -85,7 +92,7 @@ impl Controller {
             status: LockStatus::default(),
             override_timeout,
             last_screen_locked: None,
-            last_tick_at: None,
+            last_clocks: None,
         }
     }
 
@@ -135,17 +142,18 @@ impl Controller {
     pub fn tick(&mut self, settings: &AppSettings, input: SystemInputs) -> TickResult {
         let now = input.now;
 
-        // 잠금이 풀렸거나, 오래 멈춰 있다가(잠자기) 다시 돌기 시작했으면 사용자가 돌아온 것으로 본다.
+        // 잠금이 풀렸거나 잠자기에서 깨어났으면 사용자가 돌아온 것으로 본다.
         if self.last_screen_locked == Some(true) && !input.screen_locked {
             self.note_presence(now);
         }
-        if let Some(prev) = self.last_tick_at {
-            if now - prev > WAKE_GAP_SECONDS {
+        if let Some((prev_now, prev_awake)) = self.last_clocks {
+            let slept = (now - prev_now) - (input.awake - prev_awake);
+            if slept > SLEEP_GAP_SECONDS {
                 self.note_presence(now);
             }
         }
         self.last_screen_locked = Some(input.screen_locked);
-        self.last_tick_at = Some(now);
+        self.last_clocks = Some((now, input.awake));
 
         if let Some(Some(until)) = self.pause {
             if until <= now {
@@ -205,6 +213,11 @@ impl Controller {
                     ));
                 }
             }
+        }
+
+        // 일시 중지가 끝나는 시각은 화면에 보여 주므로 벽시계로 바꿔 둔다.
+        if let EngineState::Paused { until: Some(t) } = output.state {
+            output.state = EngineState::Paused { until: Some(t - now + input.wall) };
         }
 
         let new_status = LockStatus {

@@ -66,11 +66,21 @@ pub fn refresh_location(st: &AppState) {
     *lock(&st.location) = s;
 }
 
+/// 판단에 쓰는 지금 시각 (잠자기 동안에도 흐르는 단조 시계, 자가 진단이면 가짜 시각)
+pub fn logic_now(st: &AppState) -> f64 {
+    if let Some(f) = lock(&st.fake).as_ref() {
+        return f.now;
+    }
+    wifilock_platform::clocks().total
+}
+
 /// 지금 시스템 값(또는 자가 진단의 가짜 값)
 pub fn gather(st: &AppState) -> SystemInputs {
     if let Some(f) = lock(&st.fake).clone() {
         return SystemInputs {
             now: f.now,
+            awake: f.now,
+            wall: f.now,
             idle_seconds: Some(f.idle),
             screen_locked: f.locked,
             assertion_holders: f.holders,
@@ -78,8 +88,11 @@ pub fn gather(st: &AppState) -> SystemInputs {
         };
     }
     let respect = lock(&st.store).settings().respect_display_sleep_assertions;
+    let clocks = wifilock_platform::clocks();
     SystemInputs {
-        now: wifilock_core::now(),
+        now: clocks.total,
+        awake: clocks.awake,
+        wall: wifilock_core::now(),
         idle_seconds: st.platform.idle_seconds(),
         screen_locked: st.platform.screen_locked(),
         assertion_holders: if respect { st.platform.display_sleep_preventers() } else { Vec::new() },
@@ -137,10 +150,20 @@ pub fn do_lock(app: &AppHandle, reason: &str, now: f64) {
 
 /// 사용자가 메뉴에서 바로 잠글 때
 pub fn lock_now(app: &AppHandle) {
-    let now = {
-        let st = state(app);
-        let f = lock(&st.fake).as_ref().map(|f| f.now);
-        f.unwrap_or_else(wifilock_core::now)
-    };
+    let now = logic_now(&state(app));
     do_lock(app, "사용자가 '지금 잠그기' 선택", now);
+}
+
+/// 메뉴·설정 창에서 무언가 바꾼 뒤 바로 다시 판단한다.
+/// 시스템 값을 읽는 데 시간이 걸릴 수 있으므로(리눅스 디버스 등) 주 스레드를 막지 않게 따로 돌린다.
+pub fn tick_soon(app: &AppHandle) {
+    let st = state(app);
+    if st.manual.load(Ordering::SeqCst) {
+        ui::schedule_refresh(app);
+        return;
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        tick(&handle);
+    });
 }

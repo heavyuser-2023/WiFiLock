@@ -4541,6 +4541,7 @@ version = "2.0.0"
 dependencies = [
  "chrono",
  "objc2",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "tauri",
@@ -4550,6 +4551,7 @@ dependencies = [
  "uuid",
  "wifilock-core",
  "wifilock-platform",
+ "windows",
 ]
 
 [[package]]
@@ -4568,6 +4570,7 @@ name = "wifilock-platform"
 version = "2.0.0"
 dependencies = [
  "core-foundation",
+ "libc",
  "libloading 0.9.0",
  "objc2",
  "objc2-foundation",

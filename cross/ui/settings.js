@@ -54,7 +54,13 @@ function setText(id, text) {
 
 function setChecked(id, value) {
   const e = $(id);
-  if (document.activeElement !== e && e.checked !== value) e.checked = value;
+  if (e.checked !== value) e.checked = value;
+}
+
+/** 규칙 이름을 고치는 중인지 (그동안은 목록을 다시 그리지 않는다) */
+function editingRuleName() {
+  const a = document.activeElement;
+  return !!a && a.classList.contains("name") && $("rules").contains(a);
 }
 
 async function call(cmd, args) {
@@ -79,8 +85,9 @@ function renderRules() {
   const s = state.settings;
   const key = JSON.stringify([s.rules, state.currentRuleId, state.timeoutLabels]);
   const box = $("rules");
-  // 이름을 고치는 중에는 다시 그리지 않는다 (입력이 끊기지 않도록)
-  if (key === lastRulesKey || box.contains(document.activeElement)) return;
+  // 이름을 고치는 중에만 다시 그리지 않는다 (입력이 끊기지 않도록).
+  // 단추·선택 상자에 초점이 있어도 다시 그려야 삭제·순서 바꾸기가 바로 보인다 (윈도우·리눅스는 누른 단추로 초점이 옮겨 간다).
+  if (key === lastRulesKey || editingRuleName()) return;
   lastRulesKey = key;
 
   if (s.rules.length === 0) {
@@ -233,15 +240,22 @@ function render(next) {
 
   if (!reported) {
     reported = true;
-    invoke("page_report", {
-      report: {
-        title: document.title,
-        sections: [...document.querySelectorAll("section > h2")].map((h) => h.textContent),
-        ruleCount: state.settings.rules.length,
-        os: state.os,
-      },
-    }).catch(() => {});
+    sendReport("load");
   }
+}
+
+/** 지금 화면에 보이는 내용을 앱에 알린다 (자가 진단 확인용). */
+function sendReport(kind) {
+  return invoke("page_report", {
+    report: {
+      kind,
+      title: document.title,
+      sections: [...document.querySelectorAll("section > h2")].map((h) => h.textContent),
+      ruleCount: document.querySelectorAll("#rules .rule").length,
+      ruleNames: [...document.querySelectorAll("#rules .rule input.name")].map((i) => i.value),
+      os: state.os,
+    },
+  }).catch(() => {});
 }
 
 function bind() {
@@ -302,6 +316,17 @@ window.wifilockTest = {
   },
   addByName(name, timeout) {
     return call("add_rule_by_name", { ssid: name, timeout });
+  },
+  /** 사용자가 누르는 것처럼 삭제 단추에 초점을 준 뒤 누른다. */
+  deleteByName(name) {
+    const row = [...document.querySelectorAll("#rules .rule")].find((r) => r.querySelector("input.name").value === name);
+    if (!row) return;
+    const btn = row.querySelector("button.danger");
+    btn.focus();
+    btn.click();
+  },
+  report(kind) {
+    return sendReport(kind);
   },
 };
 

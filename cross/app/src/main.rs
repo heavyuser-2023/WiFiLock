@@ -43,6 +43,34 @@ pub fn set_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
     }
 }
 
+/// 맥: 창이 모두 숨겨진 메뉴 막대 앱은 "앱 낮잠" 대상이 되어 1초 판단이 크게 늦어질 수 있다.
+/// 컴퓨터 잠자기는 막지 않고 앱 낮잠만 막는다 (NSActivityUserInitiatedAllowingIdleSystemSleep).
+#[cfg(target_os = "macos")]
+fn disable_app_nap() {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::NSString;
+    unsafe {
+        let Some(cls) = AnyClass::get(c"NSProcessInfo") else { return };
+        let info: *mut AnyObject = msg_send![cls, processInfo];
+        if info.is_null() {
+            return;
+        }
+        let reason = NSString::from_str("자리비움 시간을 재서 제때 화면을 잠그기 위함");
+        let options: u64 = 0x00EF_FFFF;
+        let token: Option<Retained<AnyObject>> = msg_send![info, beginActivityWithOptions: options, reason: &*reason];
+        match token {
+            // 앱이 끝날 때까지 유지한다.
+            Some(t) => {
+                std::mem::forget(t);
+                logging::info("앱 낮잠 방지 켬");
+            }
+            None => logging::error("앱 낮잠 방지 실패"),
+        }
+    }
+}
+
 fn main() {
     let opts = Options::parse(std::env::args());
     let is_self_test = opts.is_self_test();
@@ -52,8 +80,13 @@ fn main() {
         // 이미 실행 중인데 다시 열면 (파인더·시작 메뉴에서 다시 실행 등) 설정 창을 띄운다.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             logging::info("이미 실행 중 → 설정 창 열기");
+            // 윈도우에서는 다른 프로세스가 보낸 메시지를 처리하는 도중에 불리므로,
+            // 그 처리가 끝난 뒤 주 스레드에서 창을 열도록 한 번 미룬다.
             let handle = app.clone();
-            let _ = app.run_on_main_thread(move || views::open_settings(&handle));
+            std::thread::spawn(move || {
+                let h2 = handle.clone();
+                let _ = handle.run_on_main_thread(move || views::open_settings(&h2));
+            });
         }));
     }
 
@@ -115,6 +148,8 @@ fn main() {
             // 메뉴 막대 전용 앱: 독에 나타나지 않게 한다.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            #[cfg(target_os = "macos")]
+            disable_app_nap();
 
             // 위치 관리자는 주 스레드에서 만들어 둔다 (맥).
             wifilock_platform::prepare_on_main_thread();

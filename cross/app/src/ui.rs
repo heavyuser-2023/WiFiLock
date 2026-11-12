@@ -131,11 +131,11 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
     }
 }
 
-/// 판단 스레드 등에서 부른다: 반영할 내용을 만들어 주 스레드로 넘긴다.
+/// 판단 스레드 등에서 부른다: 주 스레드에서 그때의 최신 상태로 반영한다.
+/// (여기서 미리 계산해 넘기면 그 사이 메뉴에서 바꾼 내용을 오래된 상태로 덮어쓸 수 있다)
 pub fn schedule_refresh(app: &AppHandle) {
-    let snap = snapshot(&state(app));
     let handle = app.clone();
-    let _ = app.run_on_main_thread(move || apply(&handle, snap));
+    let _ = app.run_on_main_thread(move || refresh_now(&handle));
 }
 
 /// 주 스레드에서 지금 바로 반영한다.

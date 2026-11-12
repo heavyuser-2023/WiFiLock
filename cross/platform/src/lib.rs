@@ -69,6 +69,31 @@ pub trait Platform: Send + Sync {
     fn diagnostics(&self) -> Vec<(String, String)>;
 }
 
+/// 단조 시계 두 개 (초). 벽시계와 달리 사용자가 시각을 바꿔도 흔들리지 않는다.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clocks {
+    /// 컴퓨터가 깨어 있던 시간만 센다 (잠자기 동안 멈춤)
+    pub awake: f64,
+    /// 잠자기 동안에도 흐른다
+    pub total: f64,
+}
+
+/// 지금 단조 시계 값. 두 값의 차이가 늘어난 만큼 컴퓨터가 잠자기에 있었던 것이다.
+pub fn clocks() -> Clocks {
+    #[cfg(target_os = "macos")]
+    {
+        macos::clocks()
+    }
+    #[cfg(windows)]
+    {
+        windows::clocks()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::clocks()
+    }
+}
+
 /// 이 운영체제용 구현을 만든다.
 pub fn create() -> Box<dyn Platform> {
     #[cfg(target_os = "macos")]

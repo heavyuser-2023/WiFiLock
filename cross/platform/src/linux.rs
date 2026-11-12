@@ -9,21 +9,34 @@
 use std::fs;
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use wifilock_core::{WiFiSnapshot, WiFiStatus};
 use x11rb::connection::{Connection as _, RequestConnection};
 use x11rb::protocol::screensaver::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
-use zbus::blocking::{proxy::Builder, Connection, Proxy};
+use zbus::blocking::{connection, proxy::Builder, Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::parse;
 use crate::{LocationStatus, Platform};
 
+/// CLOCK_MONOTONIC 은 절전 동안 멈추고, CLOCK_BOOTTIME 은 계속 흐른다.
+pub fn clocks() -> crate::Clocks {
+    let read = |id: libc::clockid_t| {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        unsafe { libc::clock_gettime(id, &mut ts) };
+        ts.tv_sec as f64 + ts.tv_nsec as f64 / 1e9
+    };
+    crate::Clocks { awake: read(libc::CLOCK_MONOTONIC), total: read(libc::CLOCK_BOOTTIME) }
+}
+
 const NM: &str = "org.freedesktop.NetworkManager";
 const LOGIN1: &str = "org.freedesktop.login1";
 const SESSION_AUTO: &str = "/org/freedesktop/login1/session/auto";
+/// 디버스 상대가 응답하지 않을 때 기다리는 최대 시간 (기본은 무한정)
+const DBUS_TIMEOUT: Duration = Duration::from_millis(1500);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum IdleMethod {
@@ -45,6 +58,8 @@ pub struct LinuxPlatform {
     idle_method: Mutex<IdleMethod>,
     x11: Mutex<Option<X11>>,
     last_lock_method: Mutex<String>,
+    /// (장치|게이트웨이 주소) → 공유기 하드웨어 주소. 잠깐 못 읽어도 규칙이 풀리지 않도록 보관한다.
+    router_cache: Mutex<Option<(String, String)>>,
 }
 
 fn proxy<'a>(conn: &'a Connection, dest: &'a str, path: &'a str, iface: &'a str) -> zbus::Result<Proxy<'a>> {
@@ -56,6 +71,10 @@ fn proxy<'a>(conn: &'a Connection, dest: &'a str, path: &'a str, iface: &'a str)
         .build()
 }
 
+fn is_kde() -> bool {
+    std::env::var("XDG_CURRENT_DESKTOP").map(|v| v.to_uppercase().contains("KDE")).unwrap_or(false)
+}
+
 fn is_wayland() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some()
         || std::env::var("XDG_SESSION_TYPE").map(|v| v == "wayland").unwrap_or(false)
@@ -63,12 +82,15 @@ fn is_wayland() -> bool {
 
 impl LinuxPlatform {
     pub fn new() -> Self {
+        let session = connection::Builder::session().ok().and_then(|b| b.method_timeout(DBUS_TIMEOUT).build().ok());
+        let system = connection::Builder::system().ok().and_then(|b| b.method_timeout(DBUS_TIMEOUT).build().ok());
         LinuxPlatform {
-            session: Connection::session().ok(),
-            system: Connection::system().ok(),
+            session,
+            system,
             idle_method: Mutex::new(IdleMethod::Unknown),
             x11: Mutex::new(None),
             last_lock_method: Mutex::new(String::new()),
+            router_cache: Mutex::new(None),
         }
     }
 
@@ -80,7 +102,11 @@ impl LinuxPlatform {
         Some(ms as f64 / 1000.0)
     }
 
+    /// KDE 의 화면 보호기 서비스 (밀리초를 돌려준다). 다른 데스크톱의 같은 이름 서비스는 단위가 달라 쓰지 않는다.
     fn freedesktop_idle(&self) -> Option<f64> {
+        if !is_kde() {
+            return None;
+        }
         let c = self.session.as_ref()?;
         for path in ["/org/freedesktop/ScreenSaver", "/ScreenSaver"] {
             if let Ok(p) = proxy(c, "org.freedesktop.ScreenSaver", path, "org.freedesktop.ScreenSaver") {
@@ -164,10 +190,75 @@ impl LinuxPlatform {
         Some(names)
     }
 
-    fn kde_has_inhibit(&self) -> Option<bool> {
+    /// KDE 전원 관리(파워데빌)가 받은 "화면 설정 변경 억제"(4) 요청. 브라우저의 동영상 재생 등이 여기로 온다.
+    fn kde_inhibitors(&self) -> Option<Vec<String>> {
         let c = self.session.as_ref()?;
-        let p = proxy(c, "org.freedesktop.ScreenSaver", "/ScreenSaver", "org.freedesktop.ScreenSaver").ok()?;
-        p.call("HasInhibit", &()).ok()
+        let p = proxy(
+            c,
+            "org.kde.Solid.PowerManagement.PolicyAgent",
+            "/org/kde/Solid/PowerManagement/PolicyAgent",
+            "org.kde.Solid.PowerManagement.PolicyAgent",
+        )
+        .ok()?;
+        let has: bool = p.call("HasInhibition", &(4u32,)).ok()?;
+        if !has {
+            return Some(Vec::new());
+        }
+        let list: Vec<(String, String)> = p.call("ListInhibitions", &()).unwrap_or_default();
+        let mut names: Vec<String> = Vec::new();
+        for (app, _reason) in list {
+            if !app.is_empty() && !names.contains(&app) {
+                names.push(app);
+            }
+        }
+        if names.is_empty() {
+            names.push("다른 앱".into());
+        }
+        Some(names)
+    }
+
+    /// 공유기 주소를 읽고, 잠깐 못 읽으면 같은 장치·게이트웨이의 마지막 값을 쓴다.
+    fn router_mac(&self, iface: &str) -> Option<String> {
+        let route = fs::read_to_string("/proc/net/route").ok();
+        let gw = route.as_deref().and_then(|r| parse::proc_route_gateway(r, iface));
+        let mut cache = self.router_cache.lock().unwrap();
+        let Some(gw) = gw else {
+            *cache = None;
+            return None;
+        };
+        let key = format!("{iface}|{}.{}.{}.{}", gw[0], gw[1], gw[2], gw[3]);
+        let found = fs::read_to_string("/proc/net/arp").ok().and_then(|a| parse::proc_arp_mac(&a, gw, iface));
+        match found {
+            Some(mac) => {
+                *cache = Some((key, mac.clone()));
+                Some(mac)
+            }
+            None => cache.as_ref().filter(|(k, _)| *k == key).map(|(_, m)| m.clone()),
+        }
+    }
+
+    fn screensaver_active(&self) -> Option<bool> {
+        let c = self.session.as_ref()?;
+        for path in ["/org/freedesktop/ScreenSaver", "/ScreenSaver"] {
+            if let Ok(p) = proxy(c, "org.freedesktop.ScreenSaver", path, "org.freedesktop.ScreenSaver") {
+                if let Ok(v) = p.call::<_, _, bool>("GetActive", &()) {
+                    return Some(v);
+                }
+            }
+        }
+        None
+    }
+
+    /// 잠금 명령을 보낸 뒤 실제로 잠겼는지 최대 2초 확인한다.
+    fn wait_locked(&self) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(2) {
+            if self.screen_locked() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        self.screen_locked()
     }
 
     fn nm_snapshot(&self) -> Option<WiFiSnapshot> {
@@ -205,12 +296,12 @@ impl LinuxPlatform {
                     .ok()
             })
             .and_then(|b| parse::ssid_from_bytes(&b));
-        let router = gateway_mac(iface);
+        let router = self.router_mac(iface);
         Some(WiFiSnapshot::new(WiFiStatus::Connected, ssid.as_deref(), router.as_deref(), Some(iface)))
     }
 
     /// 네트워크매니저가 없을 때: 무선 장치가 있는지, 연결되어 있는지만 본다.
-    fn sysfs_snapshot() -> WiFiSnapshot {
+    fn sysfs_snapshot(&self) -> WiFiSnapshot {
         let mut first: Option<String> = None;
         if let Ok(entries) = fs::read_dir("/sys/class/net") {
             for e in entries.flatten() {
@@ -220,12 +311,13 @@ impl LinuxPlatform {
                 }
                 let up = fs::read_to_string(e.path().join("operstate")).map(|s| s.trim() == "up").unwrap_or(false);
                 if up {
-                    let router = gateway_mac(&name);
+                    let router = self.router_mac(&name);
                     return WiFiSnapshot::new(WiFiStatus::Connected, None, router.as_deref(), Some(&name));
                 }
                 first.get_or_insert(name);
             }
         }
+        *self.router_cache.lock().unwrap() = None;
         let Some(name) = first else { return WiFiSnapshot::status(WiFiStatus::Unavailable) };
         let status = if rfkill_wlan_blocked() { WiFiStatus::PoweredOff } else { WiFiStatus::Disconnected };
         WiFiSnapshot::new(status, None, None, Some(&name))
@@ -249,13 +341,6 @@ fn rfkill_wlan_blocked() -> bool {
     any
 }
 
-fn gateway_mac(iface: &str) -> Option<String> {
-    let route = fs::read_to_string("/proc/net/route").ok()?;
-    let gw = parse::proc_route_gateway(&route, iface)?;
-    let arp = fs::read_to_string("/proc/net/arp").ok()?;
-    parse::proc_arp_mac(&arp, gw, iface)
-}
-
 impl Platform for LinuxPlatform {
     fn os(&self) -> &'static str {
         "linux"
@@ -274,8 +359,14 @@ impl Platform for LinuxPlatform {
                 return Some(v);
             }
         }
-        // 처음이거나 쓰던 방법이 실패하면 다시 고른다
-        for method in [IdleMethod::Mutter, IdleMethod::FreedesktopScreenSaver, IdleMethod::X11] {
+        // 처음이거나 쓰던 방법이 실패하면 다시 고른다.
+        // X11 세션이면 단위가 확실한 X11 확장을 먼저, 웨이랜드면 그놈 → KDE 순서.
+        let order = if is_wayland() {
+            [IdleMethod::Mutter, IdleMethod::FreedesktopScreenSaver, IdleMethod::X11]
+        } else {
+            [IdleMethod::X11, IdleMethod::Mutter, IdleMethod::FreedesktopScreenSaver]
+        };
+        for method in order {
             if let Some(v) = try_method(method) {
                 *m = method;
                 return Some(v);
@@ -285,24 +376,17 @@ impl Platform for LinuxPlatform {
         None
     }
 
+    /// logind 의 잠금 표시·세션 활성 여부, 화면 보호기 활성 여부 중 하나라도 잠김을 가리키면 잠긴 것으로 본다.
     fn screen_locked(&self) -> bool {
         if let Some(s) = self.session_proxy() {
-            let locked = s.get_property::<bool>("LockedHint").ok();
-            let active = s.get_property::<bool>("Active").ok();
-            if locked.is_some() || active.is_some() {
-                return locked.unwrap_or(false) || !active.unwrap_or(true);
+            if s.get_property::<bool>("LockedHint").unwrap_or(false) {
+                return true;
+            }
+            if !s.get_property::<bool>("Active").unwrap_or(true) {
+                return true;
             }
         }
-        if let Some(c) = self.session.as_ref() {
-            for path in ["/org/freedesktop/ScreenSaver", "/ScreenSaver"] {
-                if let Ok(p) = proxy(c, "org.freedesktop.ScreenSaver", path, "org.freedesktop.ScreenSaver") {
-                    if let Ok(v) = p.call::<_, _, bool>("GetActive", &()) {
-                        return v;
-                    }
-                }
-            }
-        }
-        false
+        self.screensaver_active().unwrap_or(false)
     }
 
     fn display_sleep_preventers(&self) -> Vec<String> {
@@ -314,20 +398,23 @@ impl Platform for LinuxPlatform {
                 return v;
             }
         }
-        if self.kde_has_inhibit() == Some(true) {
-            return vec!["다른 앱".into()];
+        if let Some(v) = self.kde_inhibitors() {
+            return v;
         }
         Vec::new()
     }
 
+    /// logind 의 Lock 은 신호만 보내므로, 받아 줄 잠금 프로그램이 없어도 성공을 돌려준다.
+    /// 그래서 방법마다 실제로 잠겼는지 확인하고, 안 잠겼으면 다음 방법을 시도한다.
     fn lock_screen(&self) -> Result<String, String> {
         let mut errors = Vec::new();
         if let Some(s) = self.session_proxy() {
             match s.call::<_, _, ()>("Lock", &()) {
-                Ok(()) => {
+                Ok(()) if self.wait_locked() => {
                     *self.last_lock_method.lock().unwrap() = "logind".into();
                     return Ok("화면 잠금 (logind Session.Lock)".into());
                 }
+                Ok(()) => errors.push("logind: 명령은 성공했지만 잠기지 않음".into()),
                 Err(e) => errors.push(format!("logind: {e}")),
             }
         }
@@ -335,7 +422,8 @@ impl Platform for LinuxPlatform {
             for path in ["/org/freedesktop/ScreenSaver", "/ScreenSaver"] {
                 if let Ok(p) = proxy(c, "org.freedesktop.ScreenSaver", path, "org.freedesktop.ScreenSaver") {
                     match p.call::<_, _, ()>("Lock", &()) {
-                        Ok(()) => return Ok("화면 잠금 (org.freedesktop.ScreenSaver.Lock)".into()),
+                        Ok(()) if self.wait_locked() => return Ok("화면 잠금 (org.freedesktop.ScreenSaver.Lock)".into()),
+                        Ok(()) => errors.push("ScreenSaver: 명령은 성공했지만 잠기지 않음".into()),
                         Err(e) => errors.push(format!("ScreenSaver: {e}")),
                     }
                 }
@@ -343,16 +431,17 @@ impl Platform for LinuxPlatform {
         }
         for (cmd, args) in [("loginctl", &["lock-session"][..]), ("xdg-screensaver", &["lock"][..])] {
             match Command::new(cmd).args(args).status() {
-                Ok(s) if s.success() => return Ok(format!("화면 잠금 ({cmd} {})", args.join(" "))),
+                Ok(s) if s.success() && self.wait_locked() => return Ok(format!("화면 잠금 ({cmd} {})", args.join(" "))),
+                Ok(s) if s.success() => errors.push(format!("{cmd}: 명령은 성공했지만 잠기지 않음")),
                 Ok(s) => errors.push(format!("{cmd}: 종료 코드 {s}")),
                 Err(e) => errors.push(format!("{cmd}: {e}")),
             }
         }
-        Err(format!("화면을 잠글 방법을 찾지 못함 ({})", errors.join("; ")))
+        Err(format!("화면을 잠그지 못함 ({})", errors.join("; ")))
     }
 
     fn wifi_snapshot(&self) -> WiFiSnapshot {
-        self.nm_snapshot().unwrap_or_else(Self::sysfs_snapshot)
+        self.nm_snapshot().unwrap_or_else(|| self.sysfs_snapshot())
     }
 
     fn location_status(&self) -> LocationStatus {
@@ -375,7 +464,7 @@ impl Platform for LinuxPlatform {
             ("자리비움 시간".into(), idle.into()),
             ("화면 잠그기".into(), "logind → ScreenSaver → loginctl → xdg-screensaver".into()),
             ("잠김 여부".into(), "logind LockedHint/Active → ScreenSaver.GetActive".into()),
-            ("화면 유지 요청".into(), "그놈 세션 관리자 → logind → KDE HasInhibit".into()),
+            ("화면 유지 요청".into(), "그놈 세션 관리자 → logind → KDE 전원 관리".into()),
             ("와이파이".into(), if self.system.is_some() { "네트워크매니저 (D-Bus)" } else { "/sys/class/net" }.into()),
             ("세션 버스".into(), if self.session.is_some() { "연결됨" } else { "없음" }.into()),
             ("시스템 버스".into(), if self.system.is_some() { "연결됨" } else { "없음" }.into()),

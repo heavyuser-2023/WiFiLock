@@ -112,7 +112,7 @@ pub fn build(app: &AppHandle, snap: &UiSnapshot) -> tauri::Result<(Menu<Wry>, Me
 /// 메뉴 항목을 골랐을 때 (주 스레드)
 pub fn handle(app: &AppHandle, id: &str) {
     let st = state(app);
-    let now = lock(&st.fake).as_ref().map(|f| f.now).unwrap_or_else(wifilock_core::now);
+    let now = engine::logic_now(&st);
     match id {
         "lock-now" => engine::lock_now(app),
         "enabled" => {
@@ -154,10 +154,7 @@ pub fn handle(app: &AppHandle, id: &str) {
             }
         }
     }
-    // 바뀐 내용을 바로 판단·반영한다.
-    if !st.manual.load(std::sync::atomic::Ordering::SeqCst) {
-        let inputs = engine::gather(&st);
-        engine::tick_with(app, inputs);
-    }
+    // 바뀐 내용을 바로 반영하고, 판단은 따로 돌린다.
     ui::refresh_now(app);
+    engine::tick_soon(app);
 }

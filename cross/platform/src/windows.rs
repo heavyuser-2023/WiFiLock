@@ -10,6 +10,7 @@
 use std::ffi::c_void;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use windows::core::{GUID, PWSTR};
 use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS, HANDLE, NO_ERROR};
@@ -32,7 +33,8 @@ use windows::Win32::System::RemoteDesktop::{
     WTS_CURRENT_SESSION,
 };
 use windows::Win32::System::Power::ES_DISPLAY_REQUIRED;
-use windows::Win32::System::SystemInformation::GetTickCount;
+use windows::Win32::System::SystemInformation::{GetTickCount, GetTickCount64};
+use windows::Win32::System::WindowsProgramming::QueryUnbiasedInterruptTime;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::System::Shutdown::LockWorkStation;
 use wifilock_core::{WiFiSnapshot, WiFiStatus};
@@ -41,16 +43,44 @@ use crate::parse;
 use crate::{LocationStatus, Platform};
 
 const IF_TYPE_IEEE80211: u32 = 71;
+
+/// QueryUnbiasedInterruptTime 은 잠자기·최대 절전 동안 멈추고, GetTickCount64 는 계속 흐른다.
+pub fn clocks() -> crate::Clocks {
+    unsafe {
+        let mut unbiased: u64 = 0;
+        let ok = QueryUnbiasedInterruptTime(&mut unbiased).as_bool();
+        let total = GetTickCount64() as f64 / 1000.0;
+        let awake = if ok { unbiased as f64 / 1e7 } else { total };
+        crate::Clocks { awake, total }
+    }
+}
 const WTS_SESSIONSTATE_LOCK: i32 = 0;
 
 pub struct WindowsPlatform {
     /// 와이파이 이름을 읽으려다 거부당했는지 (윈도우 11 24H2 위치 권한)
     ssid_denied: AtomicBool,
+    /// (어댑터|게이트웨이 주소) → 공유기 하드웨어 주소. 깨어난 직후처럼 잠깐 못 읽어도 규칙이 풀리지 않도록 보관한다.
+    router_cache: Mutex<Option<(String, String)>>,
 }
 
 impl WindowsPlatform {
     pub fn new() -> Self {
-        WindowsPlatform { ssid_denied: AtomicBool::new(false) }
+        WindowsPlatform { ssid_denied: AtomicBool::new(false), router_cache: Mutex::new(None) }
+    }
+
+    fn router_mac(&self) -> Option<String> {
+        let mut cache = self.router_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let Some((key, found)) = gateway_mac() else {
+            *cache = None;
+            return None;
+        };
+        match found {
+            Some(mac) => {
+                *cache = Some((key, mac.clone()));
+                Some(mac)
+            }
+            None => cache.as_ref().filter(|(k, _)| *k == key).map(|(_, m)| m.clone()),
+        }
     }
 }
 
@@ -137,8 +167,9 @@ fn current_ssid(h: &WlanHandle, guid: &GUID) -> Result<Option<String>, bool> {
     Ok(ssid)
 }
 
-/// 와이파이 어댑터의 기본 게이트웨이 하드웨어 주소 (공유기 주소)
-fn gateway_mac() -> Option<String> {
+/// 와이파이 어댑터의 기본 게이트웨이와 그 하드웨어 주소 (공유기 주소).
+/// 게이트웨이가 없으면 None, 게이트웨이는 있는데 주소를 못 읽으면 Some((열쇠, None)).
+fn gateway_mac() -> Option<(String, Option<String>)> {
     unsafe {
         let flags = GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
         let mut size: u32 = 16 * 1024;
@@ -183,10 +214,11 @@ fn gateway_mac() -> Option<String> {
             cur = a.Next;
         }
         let (ip, luid) = target?;
+        let key = format!("{luid}|{}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
 
         let mut table: *mut MIB_IPNET_TABLE2 = std::ptr::null_mut();
         if GetIpNetTable2(AF_INET, &mut table) != NO_ERROR || table.is_null() {
-            return None;
+            return Some((key, None));
         }
         let mut found = None;
         let n = (*table).NumEntries as usize;
@@ -211,7 +243,7 @@ fn gateway_mac() -> Option<String> {
             break;
         }
         FreeMibTable(table as *const c_void);
-        found
+        Some((key, found))
     }
 }
 
@@ -310,7 +342,7 @@ impl Platform for WindowsPlatform {
                 None
             }
         };
-        let router = gateway_mac();
+        let router = self.router_mac();
         WiFiSnapshot::new(WiFiStatus::Connected, ssid.as_deref(), router.as_deref(), Some(&name))
     }
 

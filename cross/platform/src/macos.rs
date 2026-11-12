@@ -45,6 +45,28 @@ extern "C" {}
 #[link(name = "AppKit", kind = "framework")]
 extern "C" {}
 
+#[repr(C)]
+struct MachTimebaseInfo {
+    numer: u32,
+    denom: u32,
+}
+
+extern "C" {
+    fn mach_absolute_time() -> u64;
+    fn mach_continuous_time() -> u64;
+    fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
+}
+
+/// mach_absolute_time 은 잠자기 동안 멈추고, mach_continuous_time 은 계속 흐른다.
+pub fn clocks() -> crate::Clocks {
+    let mut tb = MachTimebaseInfo { numer: 1, denom: 1 };
+    unsafe {
+        mach_timebase_info(&mut tb);
+        let to_secs = |t: u64| (t as f64) * (tb.numer as f64) / (tb.denom.max(1) as f64) / 1e9;
+        crate::Clocks { awake: to_secs(mach_absolute_time()), total: to_secs(mach_continuous_time()) }
+    }
+}
+
 const HID_SYSTEM_STATE: i32 = 1;
 const ANY_INPUT_EVENT: u32 = !0;
 

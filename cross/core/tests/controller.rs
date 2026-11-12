@@ -1,5 +1,8 @@
 //! 가짜 시간·가짜 와이파이로 제어 흐름 전체를 돌리는 시나리오 (기존 맥 앱 자가 진단과 같은 시나리오)
 
+/// 벽시계 = 단조 시계 + 이 값 (시험용)
+const WALL_OFFSET: f64 = 1_700_000_000.0;
+
 use wifilock_core::{
     AppSettings, Controller, EngineState, PolicySource, SettingsStore, SystemInputs, TickResult, WiFiSnapshot, WiFiStatus,
 };
@@ -8,6 +11,8 @@ struct Sim {
     c: Controller,
     store: SettingsStore,
     now: f64,
+    /// 깨어 있던 시간만 세는 시계 (잠자기를 흉내 낼 때만 now 와 달라진다)
+    awake: f64,
     idle: f64,
     locked: bool,
     holders: Vec<String>,
@@ -27,7 +32,8 @@ impl Sim {
         Sim {
             c: Controller::new(None),
             store,
-            now: 1_700_000_000.0,
+            now: 50_000.0,
+            awake: 40_000.0,
             idle: 0.0,
             locked: false,
             holders: vec![],
@@ -41,6 +47,8 @@ impl Sim {
             self.store.settings(),
             SystemInputs {
                 now: self.now,
+                awake: self.awake,
+                wall: self.now + WALL_OFFSET,
                 idle_seconds: Some(self.idle),
                 screen_locked: self.locked,
                 assertion_holders: self.holders.clone(),
@@ -58,6 +66,7 @@ impl Sim {
         (0..seconds)
             .map(|_| {
                 self.now += 1.0;
+                self.awake += 1.0;
                 self.idle += 1.0;
                 self.tick()
             })
@@ -183,6 +192,7 @@ fn full_scenario_like_the_mac_self_test() {
     });
     for i in 0..120 {
         s.now += 1.0;
+        s.awake += 1.0;
         s.idle = (i % 4) as f64 * 0.1;
         let r = s.tick();
         assert!(r.lock_reason.is_none() && r.output.warning_remaining().is_none(), "{i}초째");
@@ -207,17 +217,37 @@ fn unlock_transition_counts_as_presence() {
 }
 
 #[test]
-fn long_gap_between_ticks_counts_as_wake() {
+fn sleep_detected_by_clock_difference_counts_as_wake() {
     let mut s = Sim::new();
     s.wifi = WiFiSnapshot::status(WiFiStatus::Disconnected); // 60초 규칙
     s.tick();
-    // 컴퓨터가 잠자기에 들어가 2시간 동안 아무것도 돌지 않음
+    // 컴퓨터가 2시간 잠자기: 잠자기 동안에도 흐르는 시계만 앞으로 간다
     s.now += 7200.0;
     s.idle += 7200.0;
     let r = s.tick();
     assert!(r.lock_reason.is_none() && r.output.warning_remaining().is_none(), "깨어나자마자 잠그지 않는다");
     let outs = s.advance(70);
     assert_eq!(first_lock(&outs), Some(60));
+}
+
+/// 검토에서 찾은 결함: 앱 낮잠 등으로 판단이 30초 넘게 늦어지면 깨어남으로 잘못 보고 자리비움을 매번 초기화했다.
+#[test]
+fn delayed_ticks_without_sleep_still_lock() {
+    let mut s = Sim::new();
+    s.wifi = WiFiSnapshot::status(WiFiStatus::Disconnected); // 60초 규칙
+    s.tick();
+    // 판단이 40초씩 늦게 도는 상황 (두 시계가 함께 흐름 = 잠자기가 아님)
+    let mut locked_at = None;
+    for i in 1..=5 {
+        s.now += 40.0;
+        s.awake += 40.0;
+        s.idle += 40.0;
+        let r = s.tick();
+        if r.lock_reason.is_some() || r.output.warning_remaining().is_some() {
+            locked_at.get_or_insert(i * 40);
+        }
+    }
+    assert!(matches!(locked_at, Some(t) if t <= 80), "늦게 돌아도 자리비움을 초기화하지 않는다: {locked_at:?}");
 }
 
 #[test]
@@ -228,7 +258,11 @@ fn pause_and_resume() {
     s.c.pause_for(now, Some(1800.0));
     s.idle = 5000.0;
     s.tick();
-    assert!(matches!(s.c.status().state, EngineState::Paused { until: Some(_) }));
+    let shown = match s.c.status().state {
+        EngineState::Paused { until: Some(t) } => t,
+        ref other => panic!("일시 중지여야 한다: {other:?}"),
+    };
+    assert_eq!(shown, now + 1800.0 + WALL_OFFSET, "끝나는 시각은 벽시계로 보여 준다");
     assert!(s.c.status().paused);
     // 30분이 지나면 일시 중지가 저절로 끝나고, 자리비움이 길면 경고 10초 뒤 잠근다
     let outs = s.advance(1811);
@@ -252,14 +286,14 @@ fn idle_unavailable_never_locks_but_shows_other_states() {
     s.wifi = WiFiSnapshot::status(WiFiStatus::Disconnected);
     let r = s.c.tick(
         s.store.settings(),
-        SystemInputs { now: s.now, idle_seconds: None, screen_locked: false, assertion_holders: vec![], wifi: s.wifi.clone() },
+        SystemInputs { now: s.now, awake: s.awake, wall: s.now, idle_seconds: None, screen_locked: false, assertion_holders: vec![], wifi: s.wifi.clone() },
     );
     assert_eq!(r.output.state, EngineState::IdleUnavailable);
     assert!(r.lock_reason.is_none());
     s.store.update(|st| st.enabled = false);
     let r = s.c.tick(
         s.store.settings(),
-        SystemInputs { now: s.now + 1.0, idle_seconds: None, screen_locked: false, assertion_holders: vec![], wifi: s.wifi.clone() },
+        SystemInputs { now: s.now + 1.0, awake: s.awake + 1.0, wall: s.now + 1.0, idle_seconds: None, screen_locked: false, assertion_holders: vec![], wifi: s.wifi.clone() },
     );
     assert_eq!(r.output.state, EngineState::Disabled);
 }

@@ -11,6 +11,7 @@ use crate::ui::{self, UiState};
 use crate::views;
 
 /// 설정을 바꾼 뒤 바로 판단·반영한다.
+/// 명령은 모두 비동기로 두어 주 스레드가 아닌 곳에서 돈다 (시스템 값을 읽는 동안 화면이 멈추지 않도록).
 fn after_change(app: &AppHandle) -> UiState {
     let st = state(app);
     if !st.manual.load(std::sync::atomic::Ordering::SeqCst) {
@@ -23,7 +24,7 @@ fn after_change(app: &AppHandle) -> UiState {
 }
 
 #[tauri::command]
-pub fn get_state(app: AppHandle) -> UiState {
+pub async fn get_state(app: AppHandle) -> UiState {
     let st = state(&app);
     engine::refresh_wifi(&st);
     engine::refresh_location(&st);
@@ -31,7 +32,7 @@ pub fn get_state(app: AppHandle) -> UiState {
 }
 
 #[tauri::command]
-pub fn save_settings(app: AppHandle, settings: serde_json::Value) -> Result<UiState, String> {
+pub async fn save_settings(app: AppHandle, settings: serde_json::Value) -> Result<UiState, String> {
     let parsed: AppSettings = serde_json::from_value(settings).map_err(|e| format!("설정 형식 오류: {e}"))?;
     let st = state(&app);
     if lock(&st.store).replace(parsed) {
@@ -41,7 +42,7 @@ pub fn save_settings(app: AppHandle, settings: serde_json::Value) -> Result<UiSt
 }
 
 #[tauri::command]
-pub fn add_current_network(app: AppHandle) -> UiState {
+pub async fn add_current_network(app: AppHandle) -> UiState {
     let st = state(&app);
     let wifi = lock(&st.controller).status().snapshot.clone();
     if let Some(r) = lock(&st.store).add_rule_for(&wifi, None) {
@@ -51,7 +52,7 @@ pub fn add_current_network(app: AppHandle) -> UiState {
 }
 
 #[tauri::command]
-pub fn add_rule_by_name(app: AppHandle, ssid: String, timeout: i64) -> Result<UiState, String> {
+pub async fn add_rule_by_name(app: AppHandle, ssid: String, timeout: i64) -> Result<UiState, String> {
     let st = state(&app);
     let added = lock(&st.store).add_rule_ssid(&ssid, timeout);
     match added {
@@ -65,7 +66,7 @@ pub fn add_rule_by_name(app: AppHandle, ssid: String, timeout: i64) -> Result<Ui
 }
 
 #[tauri::command]
-pub fn remove_rule(app: AppHandle, id: String) -> UiState {
+pub async fn remove_rule(app: AppHandle, id: String) -> UiState {
     if let Ok(id) = Uuid::parse_str(&id) {
         lock(&state(&app).store).remove_rule(id);
     }
@@ -73,7 +74,7 @@ pub fn remove_rule(app: AppHandle, id: String) -> UiState {
 }
 
 #[tauri::command]
-pub fn move_rule(app: AppHandle, id: String, up: bool) -> UiState {
+pub async fn move_rule(app: AppHandle, id: String, up: bool) -> UiState {
     if let Ok(id) = Uuid::parse_str(&id) {
         lock(&state(&app).store).move_rule(id, up);
     }
@@ -86,7 +87,7 @@ pub fn request_location(app: AppHandle) {
 }
 
 #[tauri::command]
-pub fn set_autostart(app: AppHandle, enabled: bool) -> UiState {
+pub async fn set_autostart(app: AppHandle, enabled: bool) -> UiState {
     let st = state(&app);
     let result = crate::set_autostart(&app, enabled);
     *lock(&st.autostart_error) = result.err();
