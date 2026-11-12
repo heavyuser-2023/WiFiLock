@@ -17,11 +17,12 @@ pub fn start(app: AppHandle) {
         .spawn(move || {
             let mut n: u64 = 0;
             let mut last_kind = String::new();
+            let mut forced = false;
             loop {
                 let started = Instant::now();
                 let st = state(&app);
                 if !st.manual.load(Ordering::SeqCst) {
-                    if n.is_multiple_of(2) {
+                    if forced || n.is_multiple_of(2) {
                         refresh_wifi(&st);
                     }
                     if n.is_multiple_of(5) {
@@ -35,11 +36,27 @@ pub fn start(app: AppHandle) {
                     }
                 }
                 n = n.wrapping_add(1);
-                let spent = started.elapsed();
-                std::thread::sleep(Duration::from_millis(1000).saturating_sub(spent).max(Duration::from_millis(50)));
+                forced = wait_next(&st, started + Duration::from_millis(1000));
             }
         })
         .expect("판단 스레드 시작");
+}
+
+/// 다음 판단 시각까지 기다린다. 그 전에 신호가 오면 바로 돌아간다 (돌아간 이유가 신호면 true).
+fn wait_next(st: &AppState, deadline: Instant) -> bool {
+    let (m, cv) = &st.wake;
+    let mut woken = lock(m);
+    loop {
+        if *woken {
+            *woken = false;
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        woken = cv.wait_timeout(woken, deadline - now).map(|(g, _)| g).unwrap_or_else(|e| e.into_inner().0);
+    }
 }
 
 fn state_kind(s: &EngineState) -> String {
@@ -134,17 +151,27 @@ pub fn do_lock(app: &AppHandle, reason: &str, now: f64) {
         Ok(m) => logging::info(format!("잠금 방법: {m}")),
         Err(e) => logging::error(e),
     };
-    // 맥의 잠금 함수는 주 스레드에서 부른다.
+    // 맥의 잠금 함수는 주 스레드에서 부른다 (바로 끝난다).
     #[cfg(target_os = "macos")]
     {
         if app.run_on_main_thread(run).is_err() {
             logging::error("주 스레드에서 잠금을 실행하지 못함");
         }
     }
+    // 윈도우·리눅스는 따로 돌린다. 리눅스는 실제로 잠겼는지 확인하느라 몇 초 걸릴 수 있어서,
+    // 부른 쪽(주 스레드의 메뉴 처리나 판단 스레드)이 그동안 멈추지 않게 한다.
     #[cfg(not(target_os = "macos"))]
     {
         let _ = app;
-        run();
+        if st.locking.swap(true, Ordering::SeqCst) {
+            logging::info("이미 잠그는 중이라 건너뜀");
+            return;
+        }
+        let st2 = st.clone();
+        std::thread::spawn(move || {
+            run();
+            st2.locking.store(false, Ordering::SeqCst);
+        });
     }
 }
 
@@ -154,16 +181,15 @@ pub fn lock_now(app: &AppHandle) {
     do_lock(app, "사용자가 '지금 잠그기' 선택", now);
 }
 
-/// 메뉴·설정 창에서 무언가 바꾼 뒤 바로 다시 판단한다.
-/// 시스템 값을 읽는 데 시간이 걸릴 수 있으므로(리눅스 디버스 등) 주 스레드를 막지 않게 따로 돌린다.
+/// 메뉴·설정 창에서 무언가 바꾼 뒤 판단 스레드에 바로 한 번 돌라고 알린다.
+/// 판단을 여러 스레드에서 겹쳐 돌리면 늦게 모은 값이 나중에 반영되어 시간이 거꾸로 갈 수 있어서다.
 pub fn tick_soon(app: &AppHandle) {
     let st = state(app);
     if st.manual.load(Ordering::SeqCst) {
         ui::schedule_refresh(app);
         return;
     }
-    let handle = app.clone();
-    std::thread::spawn(move || {
-        tick(&handle);
-    });
+    let (m, cv) = &st.wake;
+    *lock(m) = true;
+    cv.notify_one();
 }

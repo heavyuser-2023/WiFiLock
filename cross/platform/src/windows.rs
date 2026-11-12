@@ -68,12 +68,19 @@ impl WindowsPlatform {
         WindowsPlatform { ssid_denied: AtomicBool::new(false), router_cache: Mutex::new(None) }
     }
 
-    fn router_mac(&self) -> Option<String> {
+    fn clear_router_cache(&self) {
+        *self.router_cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// `conn` 은 연결을 구분하는 값(장치 이름과 와이파이 이름). 연결이 끊기면 보관값을 비우므로
+    /// 게이트웨이 주소가 같은 다른 네트워크로 옮겨도 이전 공유기 주소를 이어 쓰지 않는다.
+    fn router_mac(&self, conn: &str) -> Option<String> {
         let mut cache = self.router_cache.lock().unwrap_or_else(|e| e.into_inner());
-        let Some((key, found)) = gateway_mac() else {
+        let Some((gw_key, found)) = gateway_mac() else {
             *cache = None;
             return None;
         };
+        let key = format!("{conn}|{gw_key}");
         match found {
             Some(mac) => {
                 *cache = Some((key, mac.clone()));
@@ -315,15 +322,18 @@ impl Platform for WindowsPlatform {
 
     fn wifi_snapshot(&self) -> WiFiSnapshot {
         let Some(h) = WlanHandle::open() else {
+            self.clear_router_cache();
             return WiFiSnapshot::status(WiFiStatus::Unavailable);
         };
         let ifaces = wlan_interfaces(&h);
         if ifaces.is_empty() {
+            self.clear_router_cache();
             return WiFiSnapshot::status(WiFiStatus::Unavailable);
         }
         // 연결된 장치를 먼저 본다
         let connected = ifaces.iter().find(|i| i.isState == wlan_interface_state_connected);
         let Some(iface) = connected else {
+            self.clear_router_cache();
             let first = &ifaces[0];
             let name = wide_to_string(&first.strInterfaceDescription);
             let status = if radio_off(&h, &first.InterfaceGuid) { WiFiStatus::PoweredOff } else { WiFiStatus::Disconnected };
@@ -342,7 +352,7 @@ impl Platform for WindowsPlatform {
                 None
             }
         };
-        let router = self.router_mac();
+        let router = self.router_mac(&format!("{name}|{}", ssid.as_deref().unwrap_or("")));
         WiFiSnapshot::new(WiFiStatus::Connected, ssid.as_deref(), router.as_deref(), Some(&name))
     }
 

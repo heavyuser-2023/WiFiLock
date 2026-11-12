@@ -10,23 +10,17 @@ use crate::state::{lock, state};
 use crate::ui::{self, UiState};
 use crate::views;
 
-/// 설정을 바꾼 뒤 바로 판단·반영한다.
-/// 명령은 모두 비동기로 두어 주 스레드가 아닌 곳에서 돈다 (시스템 값을 읽는 동안 화면이 멈추지 않도록).
+/// 설정을 바꾼 뒤 판단 스레드에 바로 한 번 돌라고 알리고, 지금 설정을 돌려준다.
+/// (판단 결과는 곧이어 "state" 알림으로 설정 창에 간다)
+/// 명령은 모두 비동기로 두어 주 스레드가 아닌 곳에서 돈다.
 fn after_change(app: &AppHandle) -> UiState {
-    let st = state(app);
-    if !st.manual.load(std::sync::atomic::Ordering::SeqCst) {
-        let inputs = engine::gather(&st);
-        engine::tick_with(app, inputs);
-    } else {
-        ui::schedule_refresh(app);
-    }
+    engine::tick_soon(app);
     ui::ui_state(app)
 }
 
 #[tauri::command]
 pub async fn get_state(app: AppHandle) -> UiState {
     let st = state(&app);
-    engine::refresh_wifi(&st);
     engine::refresh_location(&st);
     after_change(&app)
 }

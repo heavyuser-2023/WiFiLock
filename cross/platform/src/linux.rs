@@ -217,8 +217,14 @@ impl LinuxPlatform {
         Some(names)
     }
 
-    /// 공유기 주소를 읽고, 잠깐 못 읽으면 같은 장치·게이트웨이의 마지막 값을 쓴다.
-    fn router_mac(&self, iface: &str) -> Option<String> {
+    fn clear_router_cache(&self) {
+        *self.router_cache.lock().unwrap() = None;
+    }
+
+    /// 공유기 주소를 읽고, 잠깐 못 읽으면 같은 연결·장치·게이트웨이의 마지막 값을 쓴다.
+    /// `conn` 은 연결마다 달라지는 값(네트워크매니저의 활성 연결 경로)이라, 게이트웨이 주소가 흔한 값이어도
+    /// 다른 네트워크의 공유기 주소를 잘못 이어 쓰지 않는다.
+    fn router_mac(&self, iface: &str, conn: &str) -> Option<String> {
         let route = fs::read_to_string("/proc/net/route").ok();
         let gw = route.as_deref().and_then(|r| parse::proc_route_gateway(r, iface));
         let mut cache = self.router_cache.lock().unwrap();
@@ -226,7 +232,7 @@ impl LinuxPlatform {
             *cache = None;
             return None;
         };
-        let key = format!("{iface}|{}.{}.{}.{}", gw[0], gw[1], gw[2], gw[3]);
+        let key = format!("{conn}|{iface}|{}.{}.{}.{}", gw[0], gw[1], gw[2], gw[3]);
         let found = fs::read_to_string("/proc/net/arp").ok().and_then(|a| parse::proc_arp_mac(&a, gw, iface));
         match found {
             Some(mac) => {
@@ -249,16 +255,32 @@ impl LinuxPlatform {
         None
     }
 
+    /// logind 가 알려 주는 잠김 여부. 읽을 수 없으면 None.
+    fn logind_locked(&self) -> Option<bool> {
+        let s = self.session_proxy()?;
+        let locked = s.get_property::<bool>("LockedHint").ok();
+        let active = s.get_property::<bool>("Active").ok();
+        if locked.is_none() && active.is_none() {
+            return None;
+        }
+        Some(locked.unwrap_or(false) || !active.unwrap_or(true))
+    }
+
+    /// 잠금 명령 뒤 확인용: 어느 쪽이든 잠김을 가리키면 잠긴 것으로 본다.
+    fn locked_any(&self) -> bool {
+        self.logind_locked().unwrap_or(false) || self.screensaver_active().unwrap_or(false)
+    }
+
     /// 잠금 명령을 보낸 뒤 실제로 잠겼는지 최대 2초 확인한다.
     fn wait_locked(&self) -> bool {
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(2) {
-            if self.screen_locked() {
+            if self.locked_any() {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(200));
         }
-        self.screen_locked()
+        self.locked_any()
     }
 
     fn nm_snapshot(&self) -> Option<WiFiSnapshot> {
@@ -279,12 +301,19 @@ impl LinuxPlatform {
         }
         let enabled: bool = nm.get_property("WirelessEnabled").unwrap_or(true);
         if !enabled {
+            self.clear_router_cache();
             return Some(WiFiSnapshot::new(WiFiStatus::PoweredOff, None, None, Some(&wifi_devices[0].1)));
         }
         // 100 = 연결 완료(activated)
         let Some((path, iface, _)) = wifi_devices.iter().find(|(_, _, s)| *s == 100) else {
+            self.clear_router_cache();
             return Some(WiFiSnapshot::new(WiFiStatus::Disconnected, None, None, Some(&wifi_devices[0].1)));
         };
+        let active_conn = proxy(c, NM, path.as_str(), "org.freedesktop.NetworkManager.Device")
+            .ok()
+            .and_then(|d| d.get_property::<OwnedObjectPath>("ActiveConnection").ok())
+            .map(|p| p.as_str().to_string())
+            .unwrap_or_default();
         let ssid = proxy(c, NM, path.as_str(), "org.freedesktop.NetworkManager.Device.Wireless")
             .ok()
             .and_then(|w| w.get_property::<OwnedObjectPath>("ActiveAccessPoint").ok())
@@ -296,7 +325,7 @@ impl LinuxPlatform {
                     .ok()
             })
             .and_then(|b| parse::ssid_from_bytes(&b));
-        let router = self.router_mac(iface);
+        let router = self.router_mac(iface, &format!("{active_conn}|{}", ssid.as_deref().unwrap_or("")));
         Some(WiFiSnapshot::new(WiFiStatus::Connected, ssid.as_deref(), router.as_deref(), Some(iface)))
     }
 
@@ -311,7 +340,7 @@ impl LinuxPlatform {
                 }
                 let up = fs::read_to_string(e.path().join("operstate")).map(|s| s.trim() == "up").unwrap_or(false);
                 if up {
-                    let router = self.router_mac(&name);
+                    let router = self.router_mac(&name, "sysfs");
                     return WiFiSnapshot::new(WiFiStatus::Connected, None, router.as_deref(), Some(&name));
                 }
                 first.get_or_insert(name);
@@ -376,17 +405,15 @@ impl Platform for LinuxPlatform {
         None
     }
 
-    /// logind 의 잠금 표시·세션 활성 여부, 화면 보호기 활성 여부 중 하나라도 잠김을 가리키면 잠긴 것으로 본다.
+    /// 평소 판단: logind 의 잠금 표시·세션 활성 여부를 먼저 본다.
+    /// 화면 보호기 서비스의 GetActive 는 데스크톱마다 뜻이 달라서(XFCE 등은 "잠금 없이 화면 보호기만 도는 중"도 참)
+    /// KDE 이거나 logind 를 읽을 수 없을 때만 쓴다. 그러지 않으면 화면 보호기만 돈 것을 잠김으로 보고 끝내 잠그지 않는다.
     fn screen_locked(&self) -> bool {
-        if let Some(s) = self.session_proxy() {
-            if s.get_property::<bool>("LockedHint").unwrap_or(false) {
-                return true;
-            }
-            if !s.get_property::<bool>("Active").unwrap_or(true) {
-                return true;
-            }
+        match self.logind_locked() {
+            Some(true) => true,
+            Some(false) => is_kde() && self.screensaver_active().unwrap_or(false),
+            None => self.screensaver_active().unwrap_or(false),
         }
-        self.screensaver_active().unwrap_or(false)
     }
 
     fn display_sleep_preventers(&self) -> Vec<String> {

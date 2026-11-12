@@ -80,6 +80,9 @@ pub struct Controller {
     last_screen_locked: Option<bool>,
     /// 지난 판단 때의 (now, awake)
     last_clocks: Option<(Timestamp, f64)>,
+    /// Some(초) 이면 판단 사이 간격이 이보다 길 때도 깨어난 것으로 본다.
+    /// 윈도우 모던 스탠바이처럼 두 시계가 함께 흐르는 대기 상태를 잡기 위한 보조 신호다 (앱 낮잠이 없는 운영체제에서만).
+    gap_wake_seconds: Option<f64>,
 }
 
 impl Controller {
@@ -93,7 +96,14 @@ impl Controller {
             override_timeout,
             last_screen_locked: None,
             last_clocks: None,
+            gap_wake_seconds: None,
         }
+    }
+
+    /// 판단 간격이 이 초보다 길면 깨어난 것으로 본다 (윈도우 모던 스탠바이 대비).
+    pub fn with_gap_wake(mut self, seconds: Option<f64>) -> Self {
+        self.gap_wake_seconds = seconds;
+        self
     }
 
     pub fn status(&self) -> &LockStatus {
@@ -148,7 +158,8 @@ impl Controller {
         }
         if let Some((prev_now, prev_awake)) = self.last_clocks {
             let slept = (now - prev_now) - (input.awake - prev_awake);
-            if slept > SLEEP_GAP_SECONDS {
+            let long_gap = self.gap_wake_seconds.is_some_and(|g| now - prev_now > g);
+            if slept > SLEEP_GAP_SECONDS || long_gap {
                 self.note_presence(now);
             }
         }

@@ -7,6 +7,9 @@ const { listen } = window.__TAURI__.event;
 let state = null;
 let lastRulesKey = "";
 let reported = false;
+/** 보낸 요청 번호와 아직 응답이 오지 않은 요청 수 (늦게 온 응답·알림이 새 값을 덮어쓰지 않게) */
+let requestSeq = 0;
+let inflight = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -64,13 +67,18 @@ function editingRuleName() {
 }
 
 async function call(cmd, args) {
+  const seq = ++requestSeq;
+  inflight++;
   try {
     const next = await invoke(cmd, args);
-    if (next) render(next);
+    // 그사이 다른 요청을 보냈다면 이 응답은 오래된 것이므로 그리지 않는다.
+    if (next && seq === requestSeq) render(next);
     return next;
   } catch (e) {
     console.error(cmd, e);
     throw e;
+  } finally {
+    inflight--;
   }
 }
 
@@ -78,6 +86,8 @@ async function call(cmd, args) {
 function save(mutate) {
   const next = JSON.parse(JSON.stringify(state.settings));
   mutate(next);
+  // 응답을 기다리지 않고 바로 반영해 둔다. 빠르게 연달아 바꿔도 앞의 변경이 뒤의 저장에 함께 실린다.
+  state.settings = next;
   return call("save_settings", { settings: next });
 }
 
@@ -332,6 +342,9 @@ window.wifilockTest = {
 
 window.addEventListener("DOMContentLoaded", async () => {
   bind();
-  await listen("state", (e) => render(e.payload));
+  // 저장 요청이 오가는 동안 오는 1초 알림은 바뀌기 전 값일 수 있으므로 건너뛴다.
+  await listen("state", (e) => {
+    if (inflight === 0) render(e.payload);
+  });
   render(await invoke("get_state"));
 });

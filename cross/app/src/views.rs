@@ -1,6 +1,6 @@
 //! 설정 창과 잠금 직전 경고 창
 
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::logging;
 use crate::state::{lock, state};
@@ -116,20 +116,38 @@ fn configure_hud_macos(w: &tauri::WebviewWindow) {
     }
 }
 
-/// 주 모니터 위쪽 가운데. 모니터마다 배율이 다를 수 있으므로 물리 좌표로 계산한다.
+/// 주 모니터 위쪽 가운데.
+/// - 윈도우: 물리 좌표 그대로 쓰므로 모니터마다 배율이 달라도 맞다.
+/// - 맥·리눅스: 화면 전체 좌표가 논리(포인트) 단위라 논리 좌표로 넘긴다.
+///   (맥의 창 라이브러리는 물리 좌표를 "창이 지금 있는 화면"의 배율로 나누므로, 주 화면을 바꾼 직후 어긋난다)
 fn position_hud(app: &AppHandle, w: &tauri::WebviewWindow) {
     let monitor = app.primary_monitor().ok().flatten().or_else(|| w.current_monitor().ok().flatten());
     if let Some(m) = monitor {
         let scale = m.scale_factor();
         let pos = m.position();
         let size = m.size();
-        let x = pos.x as f64 + (size.width as f64 - HUD_W * scale) / 2.0;
-        let y = pos.y as f64 + 48.0 * scale;
-        let _ = w.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
+        #[cfg(windows)]
+        {
+            let x = pos.x as f64 + (size.width as f64 - HUD_W * scale) / 2.0;
+            let y = pos.y as f64 + 48.0 * scale;
+            let _ = w.set_position(tauri::PhysicalPosition::new(x.round() as i32, y.round() as i32));
+        }
+        #[cfg(not(windows))]
+        {
+            let x = pos.x as f64 / scale + (size.width as f64 / scale - HUD_W) / 2.0;
+            let y = pos.y as f64 / scale + 48.0;
+            let _ = w.set_position(tauri::LogicalPosition::new(x, y));
+        }
     }
 }
 
 /// 윈도우: 키보드 초점을 빼앗지 않도록 활성화 없이 보이고, 맨 위에 둔다.
+///
+/// 주의: 경고 창의 보이기·숨기기를 여기서 직접 하므로 창 라이브러리(tao)는 이 창을 늘 "숨김"으로 알고 있다.
+/// 그래서 경고 창에는 tao 의 창 상태 표시를 바꾸는 호출(set_always_on_top, set_focusable,
+/// set_ignore_cursor_events, show, hide 등)을 하지 않는다. 하면 tao 가 창을 숨겨 버릴 수 있다.
+/// 경고 창은 마우스를 통과시키지 않는다 (통과시키려면 계층 창이 되어 그려지지 않을 수 있어서다).
+/// 경고 창 자리를 누르면 그 클릭은 아래 창으로 가지 않지만, 마우스를 움직인 순간 경고는 취소된다.
 #[cfg(windows)]
 fn win32_show(w: &tauri::WebviewWindow, show: bool) -> bool {
     use windows::Win32::Foundation::HWND;
@@ -137,7 +155,7 @@ fn win32_show(w: &tauri::WebviewWindow, show: bool) -> bool {
         SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SW_HIDE, SW_SHOWNOACTIVATE,
     };
     let Ok(h) = w.hwnd() else { return false };
-    let hwnd = HWND(h.0 as *mut core::ffi::c_void);
+    let hwnd = HWND(h.0);
     unsafe {
         if show {
             let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -187,7 +205,7 @@ pub fn hud_visible(app: &AppHandle) -> bool {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
         if let Ok(h) = w.hwnd() {
-            return unsafe { IsWindowVisible(HWND(h.0 as *mut core::ffi::c_void)).as_bool() };
+            return unsafe { IsWindowVisible(HWND(h.0)).as_bool() };
         }
     }
     w.is_visible().unwrap_or(false)

@@ -18,10 +18,11 @@ pub use settings::{mac_normalize, AppSettings, NetworkRule, TimeoutPresets};
 pub use stabilizer::PolicyStabilizer;
 pub use store::SettingsStore;
 
-/// 시각은 1970-01-01 UTC 부터 지난 초(소수 포함)로 다룬다. 시험에서 가짜 시계를 쓰기 쉽다.
+/// 시각(초, 소수 포함). 판단에는 잠자기 동안에도 흐르는 단조 시계를 쓰고(부팅 기준),
+/// 화면에 보여 줄 때만 벽시계(1970-01-01 UTC 기준)를 쓴다. 어느 쪽인지는 필드 설명을 따른다.
 pub type Timestamp = f64;
 
-/// 현재 시각
+/// 현재 벽시계 시각 (1970-01-01 UTC 기준)
 pub fn now() -> Timestamp {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

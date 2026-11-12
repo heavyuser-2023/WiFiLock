@@ -1,7 +1,7 @@
 //! 앱 전체가 함께 쓰는 상태
 
 use std::sync::atomic::{AtomicBool, AtomicUsize};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use tauri::{AppHandle, Manager};
 use wifilock_core::{Controller, SettingsStore, WiFiSnapshot};
@@ -42,6 +42,11 @@ pub struct AppState {
     /// 설정 창이 열리며 보낸 화면 정보 (자가 진단 확인용)
     pub page_report: Mutex<Option<serde_json::Value>>,
     pub autostart_error: Mutex<Option<String>>,
+    /// 판단 스레드에 "지금 한 번 돌아라" 신호 (판단은 판단 스레드 한 곳에서만 돈다)
+    pub wake: (Mutex<bool>, Condvar),
+    /// 화면 잠금 명령을 실행하는 중 (겹쳐 실행하지 않도록, 윈도우·리눅스)
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub locking: AtomicBool,
 }
 
 impl AppState {
@@ -51,7 +56,8 @@ impl AppState {
             opts,
             platform,
             store: Mutex::new(store),
-            controller: Mutex::new(Controller::new(override_timeout)),
+            // 윈도우에는 앱 낮잠이 없으므로, 판단이 30초 넘게 멈춰 있었으면(모던 스탠바이) 깨어난 것으로 본다.
+            controller: Mutex::new(Controller::new(override_timeout).with_gap_wake(cfg!(windows).then_some(30.0))),
             wifi: Mutex::new(WiFiSnapshot::unknown()),
             location: Mutex::new(LocationStatus::NotRequired),
             fake: Mutex::new(None),
@@ -62,6 +68,8 @@ impl AppState {
             hud_remaining: Mutex::new(None),
             page_report: Mutex::new(None),
             autostart_error: Mutex::new(None),
+            wake: (Mutex::new(false), Condvar::new()),
+            locking: AtomicBool::new(false),
         }
     }
 }

@@ -250,6 +250,22 @@ fn delayed_ticks_without_sleep_still_lock() {
     assert!(matches!(locked_at, Some(t) if t <= 80), "늦게 돌아도 자리비움을 초기화하지 않는다: {locked_at:?}");
 }
 
+/// 윈도우 모던 스탠바이: 두 시계가 함께 흐르지만 앱이 멈춰 있던 간격으로 깨어남을 잡는다.
+#[test]
+fn gap_wake_option_catches_standby_where_clocks_run_together() {
+    let mut s = Sim::new();
+    s.c = Controller::new(None).with_gap_wake(Some(30.0));
+    s.wifi = WiFiSnapshot::status(WiFiStatus::Disconnected); // 60초 규칙
+    s.tick();
+    s.now += 3600.0;
+    s.awake += 3600.0;
+    s.idle += 3600.0;
+    let r = s.tick();
+    assert!(r.lock_reason.is_none() && r.output.warning_remaining().is_none(), "대기에서 깨어나자마자 잠그지 않는다");
+    let outs = s.advance(70);
+    assert_eq!(first_lock(&outs), Some(60));
+}
+
 #[test]
 fn pause_and_resume() {
     let mut s = Sim::new();
