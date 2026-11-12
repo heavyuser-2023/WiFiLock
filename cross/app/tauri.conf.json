@@ -51,18 +51,6 @@
       "wix": {
         "language": "en-US"
       }
-    },
-    "linux": {
-      "deb": {
-        "depends": [
-          "libayatana-appindicator3-1"
-        ]
-      },
-      "rpm": {
-        "depends": [
-          "libayatana-appindicator-gtk3"
-        ]
-      }
     }
   }
 }
