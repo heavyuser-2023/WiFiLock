@@ -4548,6 +4548,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-single-instance",
+ "tokio",
  "uuid",
  "wifilock-core",
  "wifilock-platform",

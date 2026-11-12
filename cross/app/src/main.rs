@@ -71,12 +71,52 @@ fn disable_app_nap() {
     }
 }
 
+/// 맥: 메뉴 막대 아이콘 옆 남은 시간을 고정폭 숫자로 그린다.
+/// 숫자마다 폭이 다르면 매 초 메뉴 막대 전체가 다시 배치되는데, 고정폭이면 글자만 다시 그린다.
+#[cfg(target_os = "macos")]
+fn use_monospaced_digits(tray: &tauri::tray::TrayIcon) {
+    let _ = tray.with_inner_tray_icon(|inner| {
+        use objc2::msg_send;
+        use objc2::runtime::{AnyClass, AnyObject};
+        let Some(item) = inner.ns_status_item() else { return };
+        unsafe {
+            let item_ptr = objc2::rc::Retained::as_ptr(&item) as *mut AnyObject;
+            let button: *mut AnyObject = msg_send![item_ptr, button];
+            let Some(font_cls) = AnyClass::get(c"NSFont") else { return };
+            if button.is_null() {
+                return;
+            }
+            let base: *mut AnyObject = msg_send![font_cls, menuBarFontOfSize: 0.0f64];
+            let size: f64 = if base.is_null() { 13.0 } else { msg_send![base, pointSize] };
+            let font: *mut AnyObject = msg_send![font_cls, monospacedDigitSystemFontOfSize: size, weight: 0.0f64];
+            if !font.is_null() {
+                let _: () = msg_send![button, setFont: font];
+            }
+        }
+    });
+}
+
+/// 비동기 작업(설정 창 명령)은 가끔만 오므로 실행 스레드를 둘만 둔다 (기본은 코어 수만큼).
+fn use_small_async_runtime() {
+    if let Ok(rt) = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("wifilock-async")
+        .enable_all()
+        .build()
+    {
+        tauri::async_runtime::set(rt.handle().clone());
+        // 앱이 끝날 때까지 유지한다.
+        std::mem::forget(rt);
+    }
+}
+
 fn main() {
     let opts = Options::parse(std::env::args());
     let is_self_test = opts.is_self_test();
+    use_small_async_runtime();
 
     let mut builder = tauri::Builder::default();
-    if !is_self_test {
+    if !is_self_test && !opts.allow_second_instance {
         // 이미 실행 중인데 다시 열면 (파인더·시작 메뉴에서 다시 실행 등) 설정 창을 띄운다.
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             logging::info("이미 실행 중 → 설정 창 열기");
@@ -168,10 +208,12 @@ fn main() {
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| menu::handle(app, event.id().as_ref()))
                 .build(app)?;
+            #[cfg(target_os = "macos")]
+            use_monospaced_digits(&tray);
             drop(tray);
             *state::lock(&st.ui) = Some(first);
 
-            views::create_hud(&handle);
+            // 경고 창은 잠금이 가까워질 때 만든다 (평소에는 웹 화면 보조 프로세스를 띄우지 않음).
             engine::start(handle.clone());
 
             if let Some(dir) = opts.self_test_dir.clone() {

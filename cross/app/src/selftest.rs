@@ -426,9 +426,28 @@ impl SelfTest {
         let pending_seen = outs.iter().take(10).all(|r| r.lock_reason.is_none());
         self.check("시나리오: 낯선 와이파이 15초 확인 뒤 2분 규칙", policy.contains("2분") && pending_seen, policy);
 
+        // 경고 창은 평소에는 없다가 잠금이 가까워지면(경고 10초 전) 미리 만들어진다
+        let none_before = !main_sync(&self.app, {
+            let a = self.app.clone();
+            move || views::hud_exists(&a)
+        })
+        .unwrap_or(true);
+        self.check("평소에는 경고 창을 만들어 두지 않음", none_before, "");
+        let outs_a = self.advance(82);
+        let prewarmed = main_sync(&self.app, {
+            let a = self.app.clone();
+            move || views::hud_exists(&a)
+        })
+        .unwrap_or(false);
+        self.check(
+            "잠금이 가까워지면 경고 창 미리 준비",
+            prewarmed && !views::hud_visible(&self.app) && outs_a.iter().all(|r| r.output.warning_remaining().is_none()),
+            "",
+        );
+
         // 경고 시작까지
-        let outs = self.advance(95);
-        let warn_at = outs.iter().position(|r| r.output.warning_remaining().is_some()).map(|i| i + 21);
+        let outs = self.advance(13);
+        let warn_at = outs.iter().position(|r| r.output.warning_remaining().is_some()).map(|i| i + 103);
         let hud_shown = views::hud_visible(&self.app) && lock(&st.hud_remaining).is_some();
         let (_, _, s, _, _) = self.menu_texts();
         self.check("시나리오: 잠금 10초 전 경고", warn_at == Some(110), format!("경고 시작 {}초", warn_at.map(|v| v.to_string()).unwrap_or("-".into())));
@@ -459,6 +478,13 @@ impl SelfTest {
         );
         let hidden = wait_until(Duration::from_secs(3), || !views::hud_visible(&self.app));
         self.check("잠근 뒤 경고 창 닫힘", hidden, "");
+        // 한동안 쓰지 않으면 경고 창을 아예 닫아 웹 화면 보조 프로세스를 내린다 (자가 진단에서는 2초)
+        let closed = wait_until(Duration::from_secs(8), || {
+            self.tick();
+            let a = self.app.clone();
+            !main_sync(&self.app, move || views::hud_exists(&a)).unwrap_or(true)
+        });
+        self.check("쓰지 않는 경고 창은 닫아 자원 반환", closed, "");
 
         // 화면이 잠겨 있으면 표시
         self.set_fake(|f| f.locked = true);

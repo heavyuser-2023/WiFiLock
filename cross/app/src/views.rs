@@ -66,8 +66,58 @@ pub fn request_location(app: &AppHandle) {
     });
 }
 
-/// 경고 창을 미리 만들어 둔다 (보이지 않게). 시작할 때 주 스레드에서 부른다.
-pub fn create_hud(app: &AppHandle) {
+/// 경고 창을 쓰지 않는 동안 이만큼 지나면 닫는다 (웹 화면 보조 프로세스와 메모리를 돌려준다).
+/// 자가 진단에서는 빨리 확인하도록 2초로 줄인다.
+fn hud_idle_close(app: &AppHandle) -> std::time::Duration {
+    if state(app).opts.is_self_test() {
+        std::time::Duration::from_secs(2)
+    } else {
+        std::time::Duration::from_secs(30)
+    }
+}
+
+/// 경고 창이 만들어져 있는지 (자가 진단 확인용)
+pub fn hud_exists(app: &AppHandle) -> bool {
+    app.get_webview_window(HUD).is_some()
+}
+
+/// 경고 창이 없으면 만든다 (주 스레드에서). 평소에는 만들어 두지 않고, 잠금이 가까워지면 미리 만든다.
+pub fn ensure_hud(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(w) = app.get_webview_window(HUD) {
+        return Some(w);
+    }
+    create_hud(app);
+    app.get_webview_window(HUD)
+}
+
+/// 경고가 없을 때 (주 스레드, 화면 반영 때마다): 잠금이 가까우면 미리 만들어 두고,
+/// 그렇지 않은 상태가 한동안 이어지면 닫는다.
+pub fn manage_idle_hud(app: &AppHandle, near_lock: bool) {
+    let st = state(app);
+    if near_lock {
+        *lock(&st.hud_idle_since) = None;
+        ensure_hud(app);
+        return;
+    }
+    let Some(w) = app.get_webview_window(HUD) else {
+        *lock(&st.hud_idle_since) = None;
+        return;
+    };
+    let mut since = lock(&st.hud_idle_since);
+    match *since {
+        None => *since = Some(std::time::Instant::now()),
+        Some(t) if t.elapsed() >= hud_idle_close(app) => {
+            *since = None;
+            drop(since);
+            let _ = w.destroy();
+            logging::info("경고 창을 한동안 쓰지 않아 닫음");
+        }
+        Some(_) => {}
+    }
+}
+
+/// 경고 창을 보이지 않게 만든다 (주 스레드).
+fn create_hud(app: &AppHandle) {
     let built = WebviewWindowBuilder::new(app, HUD, WebviewUrl::App("hud.html".into()))
         .title("와이파이 잠금 경고")
         .inner_size(HUD_W, HUD_H)
@@ -177,8 +227,9 @@ fn set_hud_visible(w: &tauri::WebviewWindow, show: bool) {
 
 pub fn show_hud(app: &AppHandle, remaining: i64) {
     let st = state(app);
+    *lock(&st.hud_idle_since) = None;
     let was = lock(&st.hud_remaining).replace(remaining);
-    let Some(w) = app.get_webview_window(HUD) else { return };
+    let Some(w) = ensure_hud(app) else { return };
     if was.is_none() {
         position_hud(app, &w);
         set_hud_visible(&w, true);

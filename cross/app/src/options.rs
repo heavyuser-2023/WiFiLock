@@ -20,6 +20,10 @@ pub struct Options {
     pub no_location_prompt: bool,
     /// 경고 창 모양 확인용: 시작하자마자 경고 창을 띄운다 (개발용)
     pub preview_hud: bool,
+    /// 이미 실행 중이어도 하나 더 띄운다 (개발용: 자원 사용량 비교 등)
+    pub allow_second_instance: bool,
+    /// 자리를 비운 것처럼 자리비움 시간을 시작 시각부터 계속 늘린다 (개발용: 자원 사용량 측정)
+    pub simulate_away: bool,
 }
 
 impl Options {
@@ -36,6 +40,8 @@ impl Options {
                 "--open-settings" => o.open_settings = true,
                 "--no-location-prompt" => o.no_location_prompt = true,
                 "--preview-hud" => o.preview_hud = true,
+                "--allow-second-instance" => o.allow_second_instance = true,
+                "--simulate-away" => o.simulate_away = true,
                 _ => {}
             }
         }
