@@ -2,7 +2,12 @@ name: 러스트·타우리판 빌드 (맥·윈도우·리눅스)
 
 on:
   push:
-    branches: [rust-tauri]
+    branches:
+      - rust-tauri
+      # main 에 올릴 때도 세 운영체제(맥·윈도우·리눅스) 빌드·검증을 돌리려면
+      # 바로 아래 줄 맨 앞의 "#" 와 그 뒤 빈칸 하나를 지워 "      - main" 으로 만드세요.
+      # (켜면 cross/ 폴더나 이 파일이 바뀐 커밋을 main 에 올릴 때마다 약 15분 동안 빌드 서버 세 대가 돕니다)
+      # - main
     paths:
       - "cross/**"
       - ".github/workflows/cross-build.yml"
