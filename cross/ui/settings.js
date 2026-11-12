@@ -19,6 +19,14 @@ const ICONS = {
   warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 8.8a15 15 0 0 1 20 0" opacity=".35"/><path d="M5 12.6a10 10 0 0 1 14 0" opacity=".35"/><path d="M12 9v6"/><circle cx="12" cy="19.2" r="1.1" fill="currentColor"/></svg>',
 };
 
+/** 메뉴 막대 남은 시간 표시 방식 */
+const COUNTDOWN_MODES = { off: "표시 안 함", minutes: "분 단위", seconds: "초 단위" };
+
+function countdownMode(s) {
+  if (!s.showCountdownInMenuBar) return "off";
+  return s.countdownInMinutes ? "minutes" : "seconds";
+}
+
 function labelOf(value) {
   const found = state.timeoutLabels.find((c) => c.value === value);
   return found ? found.label : `${value}초`;
@@ -243,7 +251,7 @@ function render(next) {
   $("holders-note").hidden = !state.holdersNote;
   setText("holders-note", state.holdersNote);
   $("countdown-row").hidden = !state.countdownSupported;
-  setChecked("countdown", s.showCountdownInMenuBar);
+  fillSelect($("countdown"), Object.keys(COUNTDOWN_MODES), countdownMode(s), (v) => COUNTDOWN_MODES[v]);
 
   const osName = { macos: "맥", windows: "윈도우", linux: "리눅스" }[state.os] || state.os;
   setText("about", `와이파이 잠금 ${state.version} · ${osName}`);
@@ -273,7 +281,14 @@ function bind() {
   $("autostart").addEventListener("change", (e) => call("set_autostart", { enabled: e.target.checked }));
   $("warn").addEventListener("change", (e) => save((n) => (n.warnBeforeLock = e.target.checked)));
   $("respect").addEventListener("change", (e) => save((n) => (n.respectDisplaySleepAssertions = e.target.checked)));
-  $("countdown").addEventListener("change", (e) => save((n) => (n.showCountdownInMenuBar = e.target.checked)));
+  $("countdown").addEventListener("change", (e) =>
+    save((n) => {
+      const mode = e.target.value;
+      n.showCountdownInMenuBar = mode !== "off";
+      // "표시 안 함"을 고르면 분·초 선택은 그대로 둔다 (다시 켤 때 전에 쓰던 단위로)
+      if (mode !== "off") n.countdownInMinutes = mode === "minutes";
+    })
+  );
   $("unknown").addEventListener("change", (e) => save((n) => (n.unknownWiFiTimeoutSeconds = Number(e.target.value))));
   $("nowifi").addEventListener("change", (e) => save((n) => (n.noWiFiTimeoutSeconds = Number(e.target.value))));
   $("warning").addEventListener("change", (e) => save((n) => (n.warningSeconds = Number(e.target.value))));

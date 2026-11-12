@@ -2,6 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Instant;
 
 use tauri::{AppHandle, Manager};
 use wifilock_core::{Controller, SettingsStore, WiFiSnapshot};
@@ -47,6 +48,10 @@ pub struct AppState {
     /// 화면 잠금 명령을 실행하는 중 (겹쳐 실행하지 않도록, 윈도우·리눅스)
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub locking: AtomicBool,
+    /// 화면 유지 요청 목록과 읽은 시각 (자주 읽지 않도록 잠깐 보관)
+    pub holders: Mutex<(Option<Instant>, Vec<String>)>,
+    /// 경고 창이 쓰이지 않기 시작한 시각 (한동안 안 쓰이면 닫아 웹 화면 보조 프로세스를 내린다)
+    pub hud_idle_since: Mutex<Option<Instant>>,
 }
 
 impl AppState {
@@ -70,6 +75,8 @@ impl AppState {
             autostart_error: Mutex::new(None),
             wake: (Mutex::new(false), Condvar::new()),
             locking: AtomicBool::new(false),
+            holders: Mutex::new((None, Vec::new())),
+            hud_idle_since: Mutex::new(None),
         }
     }
 }

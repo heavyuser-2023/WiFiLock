@@ -71,6 +71,17 @@ fn reads_settings_written_by_swift_app() {
     let back = serde_json::to_value(&s).unwrap();
     assert_eq!(back["rules"][0]["routerMAC"], "d8:07:b6:47:6b:8c");
     assert_eq!(back["unknownWiFiTimeoutSeconds"], 300);
+    assert!(!s.countdown_in_minutes, "예전 설정 파일에는 없는 값이라 기본값(초 단위)");
+}
+
+#[test]
+fn countdown_in_minutes_round_trips() {
+    let s = AppSettings { show_countdown_in_menu_bar: true, countdown_in_minutes: true, ..AppSettings::default() };
+    let v = serde_json::to_value(&s).unwrap();
+    assert_eq!(v["showCountdownInMenuBar"], true);
+    assert_eq!(v["countdownInMinutes"], true);
+    let back: AppSettings = serde_json::from_value(v).unwrap();
+    assert_eq!(back, s);
 }
 
 #[test]

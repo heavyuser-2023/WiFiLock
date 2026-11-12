@@ -43,6 +43,8 @@ pub struct UiSnapshot {
     pub structure: MenuStructure,
     /// Some 이면 경고 창에 보여 줄 남은 초
     pub hud: Option<i64>,
+    /// 잠금이 가까워 경고 창을 미리 준비해 둘 때
+    pub near_lock: bool,
 }
 
 pub fn network_text(snap: &WiFiSnapshot) -> String {
@@ -92,9 +94,20 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         _ => IconKind::Inactive,
     };
     let state_text = format::state_text(&status.state);
+    let policy = policy_text(&status);
+    // 마우스를 올렸을 때 보이는 도움말에는 매 초 바뀌는 남은 시간을 넣지 않는다.
+    // 도움말을 바꿀 때마다 메뉴 막대가 아이콘 크기를 다시 계산하기 때문이다 (남은 시간은 메뉴에서 보인다).
+    let tooltip = match status.state {
+        EngineState::Counting { .. } => format!("와이파이 잠금 — {policy}"),
+        EngineState::Warning { .. } => "와이파이 잠금 — 곧 잠김".to_string(),
+        ref other => format!("와이파이 잠금 — {}", format::state_text(other)),
+    };
+    // 메뉴 막대 글자는 바뀔 때만 다시 그린다 (apply). 분 단위면 마지막 1분 전까지는 1분에 한 번만 바뀐다.
     let title = if settings.show_countdown_in_menu_bar && cfg!(any(target_os = "macos", target_os = "linux")) {
         match status.state {
-            EngineState::Counting { remaining, .. } | EngineState::Warning { remaining } => Some(format::countdown(remaining)),
+            EngineState::Counting { remaining, .. } | EngineState::Warning { remaining } => {
+                Some(format::menu_bar_countdown(remaining, settings.countdown_in_minutes))
+            }
             _ => None,
         }
     } else {
@@ -114,12 +127,19 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         EngineState::Warning { remaining } if settings.warn_before_lock => Some(remaining.ceil().max(1.0) as i64),
         _ => None,
     };
+    let near_lock = match status.state {
+        EngineState::Counting { remaining, timeout } => {
+            settings.warn_before_lock
+                && remaining <= wifilock_core::LockScheduler::effective_warning(timeout, settings.warning_seconds as f64) + 10.0
+        }
+        _ => false,
+    };
     UiSnapshot {
         icon,
-        tooltip: format!("와이파이 잠금 — {state_text}"),
+        tooltip,
         title,
         network: network_text(snap),
-        policy: policy_text(&status),
+        policy,
         state: state_text,
         structure: MenuStructure {
             enabled: settings.enabled,
@@ -128,6 +148,7 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
             add_label,
         },
         hud,
+        near_lock,
     }
 }
 
@@ -201,7 +222,10 @@ fn apply(app: &AppHandle, snap: UiSnapshot) {
 
     match snap.hud {
         Some(r) => views::show_hud(app, r),
-        None => views::hide_hud(app),
+        None => {
+            views::hide_hud(app);
+            views::manage_idle_hud(app, snap.near_lock);
+        }
     }
 
     if app.get_webview_window(views::SETTINGS).is_some() {

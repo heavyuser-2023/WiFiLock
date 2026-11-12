@@ -426,9 +426,60 @@ impl SelfTest {
         let pending_seen = outs.iter().take(10).all(|r| r.lock_reason.is_none());
         self.check("시나리오: 낯선 와이파이 15초 확인 뒤 2분 규칙", policy.contains("2분") && pending_seen, policy);
 
+        // 메뉴 막대 남은 시간: 분 단위면 "2분"처럼, 초 단위면 "1:40"처럼 (윈도우 알림 영역에는 글자를 둘 수 없어 표시하지 않음)
+        let remaining = match lock(&st.controller).status().state {
+            EngineState::Counting { remaining, .. } => remaining,
+            _ => 0.0,
+        };
+        let title_with = |minutes: bool| {
+            lock(&st.store).update(|x| {
+                x.show_countdown_in_menu_bar = true;
+                x.countdown_in_minutes = minutes;
+            });
+            ui::snapshot(&st).title
+        };
+        let in_minutes = title_with(true);
+        let in_seconds = title_with(false);
+        lock(&st.store).update(|x| {
+            x.show_countdown_in_menu_bar = false;
+            x.countdown_in_minutes = false;
+        });
+        let title_ok = if cfg!(target_os = "windows") {
+            in_minutes.is_none() && in_seconds.is_none()
+        } else {
+            remaining > 60.0
+                && in_minutes.as_deref().is_some_and(|t| t.ends_with('분') && !t.contains(':'))
+                && in_seconds.as_deref().is_some_and(|t| t.contains(':'))
+        };
+        self.check(
+            "메뉴 막대 남은 시간: 분 단위·초 단위",
+            title_ok,
+            format!("남은 {remaining:.0}초 → 분 단위 {in_minutes:?} · 초 단위 {in_seconds:?}"),
+        );
+
+        // 경고 창은 잠금과 먼 동안에는 두지 않는다. (빌드 서버처럼 시작할 때 이미 자리비움이 길어
+        // 첫 판단에서 경고가 떴던 경우에도, 잠금과 먼 상태가 이어지면 닫혀야 한다. 자가 진단에서는 2초)
+        let none_before = wait_until(Duration::from_secs(8), || {
+            self.tick();
+            let a = self.app.clone();
+            !main_sync(&self.app, move || views::hud_exists(&a)).unwrap_or(true)
+        });
+        self.check("잠금과 먼 동안에는 경고 창을 두지 않음", none_before, "");
+        let outs_a = self.advance(82);
+        let prewarmed = main_sync(&self.app, {
+            let a = self.app.clone();
+            move || views::hud_exists(&a)
+        })
+        .unwrap_or(false);
+        self.check(
+            "잠금이 가까워지면 경고 창 미리 준비",
+            prewarmed && !views::hud_visible(&self.app) && outs_a.iter().all(|r| r.output.warning_remaining().is_none()),
+            "",
+        );
+
         // 경고 시작까지
-        let outs = self.advance(95);
-        let warn_at = outs.iter().position(|r| r.output.warning_remaining().is_some()).map(|i| i + 21);
+        let outs = self.advance(13);
+        let warn_at = outs.iter().position(|r| r.output.warning_remaining().is_some()).map(|i| i + 103);
         let hud_shown = views::hud_visible(&self.app) && lock(&st.hud_remaining).is_some();
         let (_, _, s, _, _) = self.menu_texts();
         self.check("시나리오: 잠금 10초 전 경고", warn_at == Some(110), format!("경고 시작 {}초", warn_at.map(|v| v.to_string()).unwrap_or("-".into())));
@@ -459,6 +510,13 @@ impl SelfTest {
         );
         let hidden = wait_until(Duration::from_secs(3), || !views::hud_visible(&self.app));
         self.check("잠근 뒤 경고 창 닫힘", hidden, "");
+        // 한동안 쓰지 않으면 경고 창을 아예 닫아 웹 화면 보조 프로세스를 내린다 (자가 진단에서는 2초)
+        let closed = wait_until(Duration::from_secs(8), || {
+            self.tick();
+            let a = self.app.clone();
+            !main_sync(&self.app, move || views::hud_exists(&a)).unwrap_or(true)
+        });
+        self.check("쓰지 않는 경고 창은 닫아 자원 반환", closed, "");
 
         // 화면이 잠겨 있으면 표시
         self.set_fake(|f| f.locked = true);

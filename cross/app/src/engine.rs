@@ -4,29 +4,53 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
-use wifilock_core::{EngineState, SystemInputs, TickResult};
+use wifilock_core::{EngineState, LockScheduler, SystemInputs, TickResult};
 
 use crate::logging;
 use crate::state::{lock, state, AppState};
 use crate::ui;
+
+/// 와이파이 상태를 다시 읽는 간격. 바뀌면 순간 끊김 대비(15초)를 거치므로 몇 초 늦어도 판단에 영향이 없다.
+/// (메뉴·설정 창에서 바로 다시 판단할 때는 즉시 읽는다)
+const WIFI_EVERY: Duration = Duration::from_secs(5);
+/// 위치 권한 상태를 다시 읽는 간격: 이미 허용됐으면 드물게, 아니면 허용하는 순간을 빨리 알아채도록 자주.
+const LOCATION_EVERY_GRANTED: Duration = Duration::from_secs(30);
+const LOCATION_EVERY_PENDING: Duration = Duration::from_secs(5);
+/// 화면 유지 요청 목록을 다시 읽는 간격 (잠금이 가까워지면 매 초 읽는다)
+const HOLDERS_EVERY: Duration = Duration::from_secs(5);
+
+/// 잠금이 가까운지 (경고 시작 10초 전부터). 이때는 화면 유지 요청을 매 초 확인하고 경고 창을 미리 준비한다.
+pub fn near_lock(st: &AppState) -> bool {
+    let warning = lock(&st.store).settings().warning_seconds as f64;
+    let state = lock(&st.controller).status().state.clone();
+    match state {
+        EngineState::Counting { remaining, timeout } => remaining <= LockScheduler::effective_warning(timeout, warning) + 10.0,
+        EngineState::Warning { .. } => true,
+        _ => false,
+    }
+}
 
 /// 판단 반복을 별도 스레드에서 시작한다.
 pub fn start(app: AppHandle) {
     std::thread::Builder::new()
         .name("wifilock-engine".into())
         .spawn(move || {
-            let mut n: u64 = 0;
             let mut last_kind = String::new();
-            let mut forced = false;
+            let mut forced = true;
+            let mut last_wifi: Option<Instant> = None;
+            let mut last_location: Option<Instant> = None;
             loop {
                 let started = Instant::now();
                 let st = state(&app);
                 if !st.manual.load(Ordering::SeqCst) {
-                    if forced || n.is_multiple_of(2) {
+                    if forced || last_wifi.is_none_or(|t| t.elapsed() >= WIFI_EVERY) {
                         refresh_wifi(&st);
+                        last_wifi = Some(Instant::now());
                     }
-                    if n.is_multiple_of(5) {
+                    let every = if lock(&st.location).has_permission() { LOCATION_EVERY_GRANTED } else { LOCATION_EVERY_PENDING };
+                    if forced || last_location.is_none_or(|t| t.elapsed() >= every) {
                         refresh_location(&st);
+                        last_location = Some(Instant::now());
                     }
                     let r = tick(&app);
                     let kind = state_kind(&r.output.state);
@@ -35,7 +59,6 @@ pub fn start(app: AppHandle) {
                         last_kind = kind;
                     }
                 }
-                n = n.wrapping_add(1);
                 forced = wait_next(&st, started + Duration::from_millis(1000));
             }
         })
@@ -105,14 +128,32 @@ pub fn gather(st: &AppState) -> SystemInputs {
         };
     }
     let respect = lock(&st.store).settings().respect_display_sleep_assertions;
+    let holders = if respect {
+        // 전원 관리 쪽 질의는 다른 시스템 서비스의 일도 늘리므로 평소에는 5초마다, 잠금이 가까우면 매 초 읽는다.
+        let due = lock(&st.holders).0.is_none_or(|t| t.elapsed() >= HOLDERS_EVERY) || near_lock(st);
+        if due {
+            let list = st.platform.display_sleep_preventers();
+            *lock(&st.holders) = (Some(Instant::now()), list);
+        }
+        lock(&st.holders).1.clone()
+    } else {
+        Vec::new()
+    };
     let clocks = wifilock_platform::clocks();
+    let idle_seconds = if st.opts.simulate_away {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        Some(START.get_or_init(Instant::now).elapsed().as_secs_f64())
+    } else {
+        st.platform.idle_seconds()
+    };
     SystemInputs {
         now: clocks.total,
         awake: clocks.awake,
         wall: wifilock_core::now(),
-        idle_seconds: st.platform.idle_seconds(),
-        screen_locked: st.platform.screen_locked(),
-        assertion_holders: if respect { st.platform.display_sleep_preventers() } else { Vec::new() },
+        idle_seconds,
+        // 측정용 자리비움 흉내 중에는 화면이 잠기지 않은 것으로 본다 (남은 시간이 계속 줄어들게)
+        screen_locked: !st.opts.simulate_away && st.platform.screen_locked(),
+        assertion_holders: holders,
         wifi: lock(&st.wifi).clone(),
     }
 }
