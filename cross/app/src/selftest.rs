@@ -426,6 +426,37 @@ impl SelfTest {
         let pending_seen = outs.iter().take(10).all(|r| r.lock_reason.is_none());
         self.check("시나리오: 낯선 와이파이 15초 확인 뒤 2분 규칙", policy.contains("2분") && pending_seen, policy);
 
+        // 메뉴 막대 남은 시간: 분 단위면 "2분"처럼, 초 단위면 "1:40"처럼 (윈도우 알림 영역에는 글자를 둘 수 없어 표시하지 않음)
+        let remaining = match lock(&st.controller).status().state {
+            EngineState::Counting { remaining, .. } => remaining,
+            _ => 0.0,
+        };
+        let title_with = |minutes: bool| {
+            lock(&st.store).update(|x| {
+                x.show_countdown_in_menu_bar = true;
+                x.countdown_in_minutes = minutes;
+            });
+            ui::snapshot(&st).title
+        };
+        let in_minutes = title_with(true);
+        let in_seconds = title_with(false);
+        lock(&st.store).update(|x| {
+            x.show_countdown_in_menu_bar = false;
+            x.countdown_in_minutes = false;
+        });
+        let title_ok = if cfg!(target_os = "windows") {
+            in_minutes.is_none() && in_seconds.is_none()
+        } else {
+            remaining > 60.0
+                && in_minutes.as_deref().is_some_and(|t| t.ends_with('분') && !t.contains(':'))
+                && in_seconds.as_deref().is_some_and(|t| t.contains(':'))
+        };
+        self.check(
+            "메뉴 막대 남은 시간: 분 단위·초 단위",
+            title_ok,
+            format!("남은 {remaining:.0}초 → 분 단위 {in_minutes:?} · 초 단위 {in_seconds:?}"),
+        );
+
         // 경고 창은 잠금과 먼 동안에는 두지 않는다. (빌드 서버처럼 시작할 때 이미 자리비움이 길어
         // 첫 판단에서 경고가 떴던 경우에도, 잠금과 먼 상태가 이어지면 닫혀야 한다. 자가 진단에서는 2초)
         let none_before = wait_until(Duration::from_secs(8), || {

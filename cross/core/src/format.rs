@@ -41,6 +41,21 @@ pub fn countdown(remaining: f64) -> String {
     }
 }
 
+/// 메뉴 막대 아이콘 옆 남은 시간.
+/// 초 단위: "4:59"처럼 매 초 바뀐다.
+/// 분 단위: 1분 넘게 남은 동안은 "5분"(올림)처럼 1분에 한 번만 바뀌고, 마지막 1분은 "59초"처럼 초 단위로 센다.
+pub fn menu_bar_countdown(remaining: f64, in_minutes: bool) -> String {
+    if !in_minutes {
+        return countdown(remaining);
+    }
+    let total = remaining.ceil().max(0.0) as i64;
+    if total > 60 {
+        format!("{}분", (total + 59) / 60)
+    } else {
+        format!("{total}초")
+    }
+}
+
 /// "오후 3:05" 같은 시각 표시 (이 컴퓨터의 시간대)
 pub fn clock(ts: Timestamp) -> String {
     match Local.timestamp_opt(ts.floor() as i64, 0).single() {
@@ -105,6 +120,15 @@ mod tests {
         assert_eq!(countdown(0.0), "0:00");
         assert_eq!(countdown(-3.0), "0:00");
         assert_eq!(countdown(3725.0), "1:02:05");
+        assert_eq!(menu_bar_countdown(299.2, false), "5:00");
+        assert_eq!(menu_bar_countdown(299.2, true), "5분");
+        assert_eq!(menu_bar_countdown(240.5, true), "5분");
+        assert_eq!(menu_bar_countdown(240.0, true), "4분");
+        assert_eq!(menu_bar_countdown(61.0, true), "2분");
+        assert_eq!(menu_bar_countdown(60.0, true), "60초");
+        assert_eq!(menu_bar_countdown(9.3, true), "10초");
+        assert_eq!(menu_bar_countdown(-1.0, true), "0초");
+        assert_eq!(menu_bar_countdown(3725.0, true), "63분");
         // 1970-01-01 00:00 UTC = 서울 오전 9:00
         assert_eq!(clock_with_offset(0.0, 9 * 3600), "오전 9:00");
         assert_eq!(clock_with_offset(3.0 * 3600.0 + 5.0 * 60.0, 9 * 3600), "오후 12:05");

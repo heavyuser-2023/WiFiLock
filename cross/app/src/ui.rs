@@ -102,9 +102,12 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         EngineState::Warning { .. } => "와이파이 잠금 — 곧 잠김".to_string(),
         ref other => format!("와이파이 잠금 — {}", format::state_text(other)),
     };
+    // 메뉴 막대 글자는 바뀔 때만 다시 그린다 (apply). 분 단위면 마지막 1분 전까지는 1분에 한 번만 바뀐다.
     let title = if settings.show_countdown_in_menu_bar && cfg!(any(target_os = "macos", target_os = "linux")) {
         match status.state {
-            EngineState::Counting { remaining, .. } | EngineState::Warning { remaining } => Some(format::countdown(remaining)),
+            EngineState::Counting { remaining, .. } | EngineState::Warning { remaining } => {
+                Some(format::menu_bar_countdown(remaining, settings.countdown_in_minutes))
+            }
             _ => None,
         }
     } else {

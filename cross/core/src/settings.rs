@@ -127,6 +127,8 @@ pub struct AppSettings {
     pub respect_display_sleep_assertions: bool,
     /// 메뉴 막대 아이콘 옆에 남은 시간 표시 (맥에서만 보임)
     pub show_countdown_in_menu_bar: bool,
+    /// 남은 시간을 분 단위로 표시 (마지막 1분만 초 단위). 메뉴 막대를 1분에 한 번만 다시 그려 자원을 덜 쓴다.
+    pub countdown_in_minutes: bool,
 }
 
 impl Default for AppSettings {
@@ -140,6 +142,7 @@ impl Default for AppSettings {
             warning_seconds: 10,
             respect_display_sleep_assertions: true,
             show_countdown_in_menu_bar: false,
+            countdown_in_minutes: false,
         }
     }
 }
@@ -185,6 +188,7 @@ impl<'de> Deserialize<'de> for AppSettings {
             warning_seconds: i("warningSeconds", def.warning_seconds),
             respect_display_sleep_assertions: b("respectDisplaySleepAssertions", def.respect_display_sleep_assertions),
             show_countdown_in_menu_bar: b("showCountdownInMenuBar", def.show_countdown_in_menu_bar),
+            countdown_in_minutes: b("countdownInMinutes", def.countdown_in_minutes),
         }
         .clamped())
     }
