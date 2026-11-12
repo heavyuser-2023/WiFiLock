@@ -426,13 +426,14 @@ impl SelfTest {
         let pending_seen = outs.iter().take(10).all(|r| r.lock_reason.is_none());
         self.check("시나리오: 낯선 와이파이 15초 확인 뒤 2분 규칙", policy.contains("2분") && pending_seen, policy);
 
-        // 경고 창은 평소에는 없다가 잠금이 가까워지면(경고 10초 전) 미리 만들어진다
-        let none_before = !main_sync(&self.app, {
+        // 경고 창은 잠금과 먼 동안에는 두지 않는다. (빌드 서버처럼 시작할 때 이미 자리비움이 길어
+        // 첫 판단에서 경고가 떴던 경우에도, 잠금과 먼 상태가 이어지면 닫혀야 한다. 자가 진단에서는 2초)
+        let none_before = wait_until(Duration::from_secs(8), || {
+            self.tick();
             let a = self.app.clone();
-            move || views::hud_exists(&a)
-        })
-        .unwrap_or(true);
-        self.check("평소에는 경고 창을 만들어 두지 않음", none_before, "");
+            !main_sync(&self.app, move || views::hud_exists(&a)).unwrap_or(true)
+        });
+        self.check("잠금과 먼 동안에는 경고 창을 두지 않음", none_before, "");
         let outs_a = self.advance(82);
         let prewarmed = main_sync(&self.app, {
             let a = self.app.clone();
