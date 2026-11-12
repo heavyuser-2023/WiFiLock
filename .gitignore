@@ -11,3 +11,9 @@ DerivedData/
 
 # 맥 시스템 파일
 .DS_Store
+
+# 러스트·타우리판 빌드 결과
+cross/target/
+cross/node_modules/
+cross/dist/
+cross/app/gen/

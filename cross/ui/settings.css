@@ -1,0 +1,189 @@
+:root {
+  --bg: #f2f2f7;
+  --group: #ffffff;
+  --text: #1d1d1f;
+  --secondary: #6e6e73;
+  --line: rgba(60, 60, 67, 0.16);
+  --accent: #2f6fed;
+  --accent-text: #ffffff;
+  --warn: #c76a00;
+  --error: #d70015;
+  --ok: #1f9d55;
+  --control: #ffffff;
+  --control-border: rgba(60, 60, 67, 0.25);
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1e;
+    --group: #2c2c2e;
+    --text: #f5f5f7;
+    --secondary: #a1a1a6;
+    --line: rgba(255, 255, 255, 0.12);
+    --accent: #4c8dff;
+    --warn: #ff9f0a;
+    --error: #ff453a;
+    --ok: #30d158;
+    --control: #3a3a3c;
+    --control-border: rgba(255, 255, 255, 0.18);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", "Malgun Gothic", "Noto Sans KR", "Noto Sans CJK KR", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 20px 28px;
+}
+
+section { margin-bottom: 22px; }
+
+h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--secondary);
+  margin: 0 0 6px 4px;
+}
+
+.group {
+  background: var(--group);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 0 0 0.5px var(--line);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  min-height: 44px;
+}
+
+.row + .row { border-top: 0.5px solid var(--line); }
+.row.end { justify-content: flex-end; }
+
+.text { flex: 1; min-width: 0; }
+.row > .label { flex: 1; }
+.label.strong { font-weight: 600; font-size: 15px; }
+.label.warn { color: var(--warn); font-weight: 600; }
+.desc { color: var(--secondary); font-size: 12px; margin-top: 2px; }
+.desc.error { color: var(--error); }
+
+.footer {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 6px 4px 0;
+  text-align: left;
+}
+
+.about {
+  color: var(--secondary);
+  font-size: 11px;
+  text-align: center;
+  margin-top: 8px;
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 0.5px solid var(--control-border);
+  background: var(--control);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover { filter: brightness(0.97); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+button.icon {
+  padding: 4px 7px;
+  min-width: 28px;
+  line-height: 1;
+}
+button.danger { color: var(--error); }
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  margin: 8px 2px 0;
+}
+
+.add-form { margin-top: 10px; }
+
+select, input[type="text"] {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 0.5px solid var(--control-border);
+  background: var(--control);
+  color: var(--text);
+  min-height: 28px;
+}
+select { min-width: 132px; }
+input[type="text"] { flex: 1; min-width: 0; }
+
+/* 켜기·끄기 스위치 */
+input.switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 38px;
+  height: 22px;
+  border-radius: 11px;
+  background: var(--control-border);
+  position: relative;
+  cursor: pointer;
+  flex: none;
+  transition: background 0.15s;
+  margin: 0;
+}
+input.switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s;
+}
+input.switch:checked { background: var(--ok); }
+input.switch:checked::after { transform: translateX(16px); }
+input.switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.wifi-icon { width: 30px; height: 30px; flex: none; color: var(--secondary); }
+.wifi-icon.on { color: var(--accent); }
+.wifi-icon svg { width: 30px; height: 30px; }
+
+/* 규칙 한 줄 */
+.rule .mark { width: 18px; flex: none; color: var(--secondary); text-align: center; }
+.rule .mark.current { color: var(--ok); }
+.rule input.name {
+  border: none;
+  background: transparent;
+  font-weight: 500;
+  font-size: 14px;
+  padding: 2px 4px;
+  margin-left: -4px;
+  width: 100%;
+}
+.rule input.name:focus { background: var(--bg); outline: none; }
+.rule .order { display: flex; gap: 2px; }
+.empty { color: var(--secondary); font-size: 13px; padding: 12px 14px; }
+
+[hidden] { display: none !important; }

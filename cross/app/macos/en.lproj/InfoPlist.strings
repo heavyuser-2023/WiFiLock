@@ -1,0 +1,3 @@
+"CFBundleDisplayName" = "WiFiLock";
+"NSLocationUsageDescription" = "Used to read the Wi-Fi network name so that per-network lock times apply. Location data is never stored or sent anywhere.";
+"NSLocationWhenInUseUsageDescription" = "Used to read the Wi-Fi network name so that per-network lock times apply. Location data is never stored or sent anywhere.";

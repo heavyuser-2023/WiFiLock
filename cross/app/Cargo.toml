@@ -1,0 +1,24 @@
+[package]
+name = "wifilock"
+description = "와이파이 연결 상태에 따라 자동 화면 잠금 시간을 바꿔 주는 메뉴 막대·알림 영역 앱"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "wifilock"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+wifilock-core = { path = "../core" }
+wifilock-platform = { path = "../platform" }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
