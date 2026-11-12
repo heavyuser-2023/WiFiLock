@@ -12,12 +12,12 @@
 
 | 운영체제 | 파일 | 비고 |
 | --- | --- | --- |
-| 맥 11 이상 (애플 실리콘·인텔) | `WiFiLock_2.0.0_universal.dmg` | 열어서 응용 프로그램 폴더로 끌어다 놓기 |
-| 윈도우 10·11 (x64) | `WiFiLock_2.0.0_x64-setup.exe` | 현재 사용자에게 설치 (관리자 권한 필요 없음), 한국어 설치 화면 |
-| 윈도우 10·11 (x64) | `WiFiLock_2.0.0_x64_en-US.msi` | 회사 배포 도구용 |
-| 우분투·데비안 (x64) | `WiFiLock_2.0.0_amd64.deb` | `sudo apt install ./WiFiLock_2.0.0_amd64.deb` |
-| 페도라 등 (x64) | `WiFiLock-2.0.0-1.x86_64.rpm` | `sudo dnf install ./WiFiLock-2.0.0-1.x86_64.rpm` |
-| 그 밖의 리눅스 (x64) | `WiFiLock_2.0.0_amd64.AppImage` | 실행 권한을 주고 바로 실행 |
+| 맥 11 이상 (애플 실리콘·인텔) | `WiFiLock_2.1.0_universal.dmg` | 열어서 응용 프로그램 폴더로 끌어다 놓기 |
+| 윈도우 10·11 (x64) | `WiFiLock_2.1.0_x64-setup.exe` | 현재 사용자에게 설치 (관리자 권한 필요 없음), 한국어 설치 화면 |
+| 윈도우 10·11 (x64) | `WiFiLock_2.1.0_x64_en-US.msi` | 회사 배포 도구용 |
+| 우분투·데비안 (x64) | `WiFiLock_2.1.0_amd64.deb` | `sudo apt install ./WiFiLock_2.1.0_amd64.deb` |
+| 페도라 등 (x64) | `WiFiLock-2.1.0-1.x86_64.rpm` | `sudo dnf install ./WiFiLock-2.1.0-1.x86_64.rpm` |
+| 그 밖의 리눅스 (x64) | `WiFiLock_2.1.0_amd64.AppImage` | 실행 권한을 주고 바로 실행 |
 
 리눅스 꾸러미 이름은 `wi-fi-lock` 입니다. 메뉴 아이콘을 보이려면 `libayatana-appindicator3` 가 필요하며 deb·rpm 설치 때 함께 설치됩니다.
 

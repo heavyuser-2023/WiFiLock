@@ -4537,7 +4537,7 @@ dependencies = [
 
 [[package]]
 name = "wifilock"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "objc2",
@@ -4557,7 +4557,7 @@ dependencies = [
 
 [[package]]
 name = "wifilock-core"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "chrono",
  "serde",
@@ -4568,7 +4568,7 @@ dependencies = [
 
 [[package]]
 name = "wifilock-platform"
-version = "2.0.0"
+version = "2.1.0"
 dependencies = [
  "core-foundation",
  "libc",

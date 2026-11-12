@@ -1,7 +1,7 @@
 {
   "name": "wifilock",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "와이파이 잠금 (러스트·타우리판) 빌드 도구",
   "scripts": {
     "tauri": "tauri"
