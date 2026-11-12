@@ -37,7 +37,8 @@
         "Resources/ko.lproj/InfoPlist.strings": "macos/ko.lproj/InfoPlist.strings",
         "Resources/en.lproj/InfoPlist.strings": "macos/en.lproj/InfoPlist.strings"
       },
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "macos/entitlements.plist"
     },
     "windows": {
       "nsis": {

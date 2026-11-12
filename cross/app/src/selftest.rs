@@ -177,10 +177,44 @@ impl SelfTest {
         for (k, v) in p.diagnostics() {
             self.info(&format!("사용하는 방법: {k}"), v);
         }
+        #[cfg(target_os = "macos")]
+        self.check_macos_signature();
         let images_ok = [IconKind::Active, IconKind::Inactive, IconKind::Warning]
             .iter()
             .all(|k| ui::tray_image(*k).width() > 0);
         self.check("메뉴 아이콘 그림 3종", images_ok, "");
+    }
+
+    /// 맥: 강화된 실행 환경으로 서명된 앱은 위치 접근 엔타이틀먼트가 있어야 위치 권한 요청 창이 뜬다.
+    /// (없으면 '위치 권한 요청' 단추를 눌러도 아무 반응이 없다)
+    #[cfg(target_os = "macos")]
+    fn check_macos_signature(&mut self) {
+        let exe = std::env::current_exe().unwrap_or_default();
+        let Some(bundle) = exe.ancestors().find(|p| p.extension().map(|e| e == "app").unwrap_or(false)) else {
+            self.info("앱 서명 확인", "앱 번들 밖에서 실행 중이라 건너뜀");
+            return;
+        };
+        let run = |args: &[&str]| {
+            std::process::Command::new("/usr/bin/codesign")
+                .args(args)
+                .arg(bundle)
+                .output()
+                .map(|o| format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+                .unwrap_or_default()
+        };
+        let info = run(&["-dvv"]);
+        let hardened = info.lines().any(|l| l.contains("flags=") && l.contains("runtime"));
+        let ents = run(&["-d", "--entitlements", "-", "--xml"]);
+        let has_location = ents.contains("com.apple.security.personal-information.location");
+        if hardened {
+            self.check(
+                "강화된 실행 환경에서 위치 권한 요청 가능 (엔타이틀먼트)",
+                has_location,
+                if has_location { "com.apple.security.personal-information.location 있음" } else { "엔타이틀먼트 없음: 위치 권한 요청 창이 뜨지 않는다" },
+            );
+        } else {
+            self.info("앱 서명 확인", "강화된 실행 환경이 아님");
+        }
     }
 
     // ---------- 2. 메뉴 아이콘·메뉴 ----------
