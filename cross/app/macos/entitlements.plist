@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 강화된 실행 환경(hardened runtime)에서 위치 권한을 요청하려면 이 항목이 서명에 있어야 한다.
+	     없으면 맥 위치 서비스가 권한 요청 창을 띄우지 않는다. (와이파이 이름을 읽는 데 필요) -->
+	<key>com.apple.security.personal-information.location</key>
+	<true/>
+</dict>
+</plist>

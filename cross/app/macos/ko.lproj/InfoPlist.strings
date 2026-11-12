@@ -1,0 +1,4 @@
+"CFBundleDisplayName" = "와이파이 잠금";
+"CFBundleName" = "와이파이 잠금";
+"NSLocationUsageDescription" = "와이파이 이름을 확인해 네트워크별 잠금 시간을 적용하는 데 사용합니다. 위치 정보는 저장하거나 밖으로 보내지 않습니다.";
+"NSLocationWhenInUseUsageDescription" = "와이파이 이름을 확인해 네트워크별 잠금 시간을 적용하는 데 사용합니다. 위치 정보는 저장하거나 밖으로 보내지 않습니다.";

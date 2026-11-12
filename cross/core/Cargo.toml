@@ -1,0 +1,15 @@
+[package]
+name = "wifilock-core"
+description = "와이파이 잠금: 운영체제와 무관한 핵심 로직 (잠금 시간 결정, 잠금 시점 계산, 설정)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

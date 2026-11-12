@@ -1,0 +1,121 @@
+name: 러스트·타우리판 빌드 (맥·윈도우·리눅스)
+
+on:
+  push:
+    branches: [rust-tauri]
+    paths:
+      - "cross/**"
+      - ".github/workflows/cross-build.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: 맥 (애플 실리콘·인텔 범용)
+            key: macos
+            args: --target universal-apple-darwin --bundles app,dmg
+            bin: target/universal-apple-darwin/release/bundle/macos/WiFiLock.app/Contents/MacOS/wifilock
+          - os: windows-latest
+            label: 윈도우 (x64)
+            key: windows
+            args: --bundles nsis,msi
+            bin: target/release/wifilock.exe
+          - os: ubuntu-22.04
+            label: 리눅스 (x64)
+            key: linux
+            args: --bundles deb,rpm,appimage
+            bin: target/release/wifilock
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: cross
+    env:
+      CI: "true"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 리눅스 빌드 도구 설치
+        if: matrix.key == 'linux'
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev patchelf rpm xvfb xauth dbus-x11 at-spi2-core fonts-noto-cjk
+
+      - name: 러스트 준비 (rust-toolchain.toml 의 1.99.1)
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cross
+
+      - name: 단위 테스트
+        run: cargo test --workspace
+
+      - name: 정적 검사
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: 빌드 도구 설치
+        run: npm ci --no-audit --no-fund
+
+      - name: 설치 파일 빌드
+        run: npx tauri build ${{ matrix.args }}
+
+      - name: 자가 진단 (맥)
+        if: matrix.key == 'macos'
+        run: perl -e 'alarm 300; exec @ARGV' "${{ matrix.bin }}" --self-test "$PWD/selftest"
+
+      - name: 자가 진단 (리눅스, 가상 화면)
+        if: matrix.key == 'linux'
+        run: dbus-run-session -- xvfb-run -a -s "-screen 0 1920x1080x24" timeout 300 "${{ matrix.bin }}" --self-test "$PWD/selftest"
+
+      - name: 자가 진단 (윈도우)
+        if: matrix.key == 'windows'
+        shell: pwsh
+        run: |
+          $dir = Join-Path $PWD "selftest"
+          $p = Start-Process -FilePath "${{ matrix.bin }}" -ArgumentList @("--self-test", "`"$dir`"") -PassThru
+          if (-not $p.WaitForExit(300000)) { $p.Kill(); Write-Host "시간 초과"; exit 1 }
+          exit $p.ExitCode
+
+      - name: 자가 진단 결과
+        if: always()
+        shell: bash
+        run: cat selftest/summary.txt || echo "결과 파일 없음"
+
+      - name: 설치 파일 확인값 (SHA-256)
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p ../out
+          find target -path '*/release/bundle/*' -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -exec cp {} ../out/ \;
+          cd ../out && (sha256sum * 2>/dev/null || shasum -a 256 *) | tee SHA256SUMS-${{ matrix.key }}.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wifilock-${{ matrix.key }}
+          path: |
+            out/
+            cross/selftest/
+          if-no-files-found: warn
