@@ -8,7 +8,7 @@ use tauri::image::Image;
 use tauri::{AppHandle, Emitter, Manager};
 use wifilock_core::format;
 use wifilock_core::{AppSettings, EngineState, LockStatus, PolicyResolver, PolicySource, TimeoutPresets, WiFiSnapshot};
-use wifilock_platform::LocationStatus;
+use wifilock_platform::{LocationStatus, SystemLockNote};
 
 use crate::menu;
 use crate::state::{lock, state, AppState};
@@ -276,6 +276,8 @@ pub struct UiState {
     pub warning_options: Vec<Choice>,
     pub countdown_supported: bool,
     pub holders_note: String,
+    /// 운영체제가 이 앱보다 먼저 잠그면 그 안내
+    pub system_lock: Option<SystemLockNote>,
 }
 
 fn location_info(os: &str, status: LocationStatus, snap: &WiFiSnapshot) -> LocationInfo {
@@ -335,6 +337,12 @@ pub fn ui_state(app: &AppHandle) -> UiState {
     .to_string();
     let autostart = crate::autostart_enabled(app);
     let autostart_error = lock(&st.autostart_error).clone();
+    let os_name = match os {
+        "macos" => "맥",
+        "windows" => "윈도우",
+        _ => "데스크톱",
+    };
+    let system_lock = wifilock_platform::autolock::note(os_name, &lock(&st.system_locks).1, &settings);
 
     UiState {
         os,
@@ -360,5 +368,6 @@ pub fn ui_state(app: &AppHandle) -> UiState {
         warning_options,
         countdown_supported: cfg!(any(target_os = "macos", target_os = "linux")),
         holders_note,
+        system_lock,
     }
 }

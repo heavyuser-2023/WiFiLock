@@ -23,6 +23,7 @@ use objc2::msg_send;
 use objc2_foundation::NSString;
 use wifilock_core::{WiFiSnapshot, WiFiStatus};
 
+use crate::autolock;
 use crate::parse;
 use crate::{LocationStatus, Platform};
 
@@ -323,6 +324,54 @@ impl Platform for MacPlatform {
         for url in [
             "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_LocationServices",
             "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices",
+        ] {
+            if Command::new("/usr/bin/open").arg(url).status().map(|s| s.success()).unwrap_or(false) {
+                return;
+            }
+        }
+    }
+
+    fn system_auto_locks(&self) -> Vec<crate::SystemAutoLock> {
+        let run = |cmd: &str, args: &[&str]| -> String {
+            Command::new(cmd)
+                .args(args)
+                .output()
+                .map(|o| format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)))
+                .unwrap_or_default()
+        };
+        // 화면 보호기·디스플레이 꺼짐 뒤 암호 요구 (모르면 판단하지 않는다)
+        let Some(delay) = parse::sysadminctl_screen_lock(&run("/usr/sbin/sysadminctl", &["-screenLock", "status"])) else {
+            return Vec::new();
+        };
+        let screensaver = run("/usr/bin/defaults", &["-currentHost", "read", "com.apple.screensaver", "idleTime"])
+            .trim()
+            .parse::<i64>()
+            .ok();
+        let custom = parse::pmset_display_sleep(&run("/usr/bin/pmset", &["-g", "custom"]));
+        let source = parse::pmset_power_source(&run("/usr/bin/pmset", &["-g", "ps"])).unwrap_or_else(|| "AC Power".into());
+        let has_battery = custom.iter().any(|(s, _)| s == "Battery Power");
+        let power = match source.as_str() {
+            "Battery Power" => autolock::MacPower::Battery,
+            "UPS Power" => autolock::MacPower::Ups,
+            _ if has_battery => autolock::MacPower::Adapter,
+            _ => autolock::MacPower::AdapterOnly,
+        };
+        // 지금 전원의 값이 없으면 하나뿐인 값을 쓴다 (전원이 하나인 맥)
+        let display = custom
+            .iter()
+            .find(|(s, _)| *s == source)
+            .or(if custom.len() == 1 { custom.first() } else { None })
+            .map(|(_, m)| *m);
+        autolock::mac(screensaver, display, power, delay)
+    }
+
+    fn open_system_settings(&self, target: crate::SettingsTarget) {
+        if target != crate::SettingsTarget::MacLockScreen {
+            return;
+        }
+        for url in [
+            "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension",
+            "x-apple.systempreferences:com.apple.preference.security",
         ] {
             if Command::new("/usr/bin/open").arg(url).status().map(|s| s.success()).unwrap_or(false) {
                 return;

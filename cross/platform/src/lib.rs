@@ -5,7 +5,10 @@
 use serde::Serialize;
 use wifilock_core::WiFiSnapshot;
 
+pub mod autolock;
 pub mod parse;
+
+pub use autolock::{SettingsTarget, SystemAutoLock, SystemLockNote};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -64,6 +67,13 @@ pub trait Platform: Send + Sync {
 
     /// 위치 권한 설정 화면을 연다.
     fn open_location_settings(&self);
+
+    /// 운영체제가 스스로 화면을 잠그는 조건들 (짧은 것부터). 스스로 잠그지 않거나 알 수 없으면 비어 있다.
+    /// 외부 명령을 부를 수 있어 느릴 수 있으므로 주 스레드에서 부르지 않는다.
+    fn system_auto_locks(&self) -> Vec<SystemAutoLock>;
+
+    /// 그 설정 화면을 연다.
+    fn open_system_settings(&self, target: SettingsTarget);
 
     /// 자가 진단용: 기능별로 어떤 방법을 쓰는지
     fn diagnostics(&self) -> Vec<(String, String)>;

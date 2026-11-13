@@ -3,12 +3,13 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use wifilock_core::{EngineState, LockScheduler, SystemInputs, TickResult};
 
 use crate::logging;
 use crate::state::{lock, state, AppState};
 use crate::ui;
+use crate::views;
 
 /// 와이파이 상태를 다시 읽는 간격. 바뀌면 순간 끊김 대비(15초)를 거치므로 몇 초 늦어도 판단에 영향이 없다.
 /// (메뉴·설정 창에서 바로 다시 판단할 때는 즉시 읽는다)
@@ -18,6 +19,8 @@ const LOCATION_EVERY_GRANTED: Duration = Duration::from_secs(30);
 const LOCATION_EVERY_PENDING: Duration = Duration::from_secs(5);
 /// 화면 유지 요청 목록을 다시 읽는 간격 (잠금이 가까워지면 매 초 읽는다)
 const HOLDERS_EVERY: Duration = Duration::from_secs(5);
+/// 운영체제가 스스로 잠그는 설정을 다시 읽는 간격 (설정 창이 열려 있는 동안만 읽는다)
+const SYSTEM_LOCK_EVERY: Duration = Duration::from_secs(30);
 
 /// 잠금이 가까운지 (경고 시작 10초 전부터). 이때는 화면 유지 요청을 매 초 확인하고 경고 창을 미리 준비한다.
 pub fn near_lock(st: &AppState) -> bool {
@@ -51,6 +54,9 @@ pub fn start(app: AppHandle) {
                     if forced || last_location.is_none_or(|t| t.elapsed() >= every) {
                         refresh_location(&st);
                         last_location = Some(Instant::now());
+                    }
+                    if app.get_webview_window(views::SETTINGS).is_some() {
+                        refresh_system_locks(&st, false);
                     }
                     let r = tick(&app);
                     let kind = state_kind(&r.output.state);
@@ -99,6 +105,25 @@ pub fn refresh_wifi(st: &AppState) {
         ));
         *w = snap;
     }
+}
+
+/// 운영체제가 스스로 잠그는 설정을 필요하면 다시 읽는다 (설정 창 안내용).
+/// 외부 명령을 부를 수 있으므로 주 스레드에서 부르지 않는다. 자가 진단 중(가짜 값 사용)에는 읽지 않는다.
+pub fn refresh_system_locks(st: &AppState, force: bool) {
+    if lock(&st.fake).is_some() {
+        return;
+    }
+    if !force && lock(&st.system_locks).0.is_some_and(|t| t.elapsed() < SYSTEM_LOCK_EVERY) {
+        return;
+    }
+    let list = st.platform.system_auto_locks();
+    let mut g = lock(&st.system_locks);
+    if g.0.is_none() || g.1 != list {
+        let text: Vec<String> =
+            list.iter().map(|l| format!("{} ({})", wifilock_core::format::duration(l.after_seconds), l.cause)).collect();
+        logging::info(format!("운영체제 자체 잠금: {}", if text.is_empty() { "없음 또는 알 수 없음".into() } else { text.join(" / ") }));
+    }
+    *g = (Some(Instant::now()), list);
 }
 
 pub fn refresh_location(st: &AppState) {

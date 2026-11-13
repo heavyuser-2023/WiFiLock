@@ -22,7 +22,19 @@ fn after_change(app: &AppHandle) -> UiState {
 pub async fn get_state(app: AppHandle) -> UiState {
     let st = state(&app);
     engine::refresh_location(&st);
+    // 설정 창을 열 때마다 운영체제 자체 잠금 설정을 새로 읽는다 (그사이 시스템 설정을 바꿨을 수 있다)
+    engine::refresh_system_locks(&st, true);
     after_change(&app)
+}
+
+/// 운영체제가 스스로 잠그는 설정 화면을 연다 (앱이 읽어 둔 설정 중 먼저 잠그는 것).
+#[tauri::command]
+pub async fn open_system_lock_settings(app: AppHandle) {
+    let st = state(&app);
+    let target = lock(&st.system_locks).1.iter().find_map(|l| l.target);
+    if let Some(t) = target {
+        st.platform.open_system_settings(t);
+    }
 }
 
 #[tauri::command]

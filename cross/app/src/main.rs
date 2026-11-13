@@ -140,6 +140,7 @@ fn main() {
             commands::remove_rule,
             commands::move_rule,
             commands::request_location,
+            commands::open_system_lock_settings,
             commands::set_autostart,
             commands::hud_state,
             commands::page_report,

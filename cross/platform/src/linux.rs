@@ -479,6 +479,47 @@ impl Platform for LinuxPlatform {
 
     fn open_location_settings(&self) {}
 
+    fn system_auto_locks(&self) -> Vec<crate::SystemAutoLock> {
+        if is_kde() {
+            let dir = std::env::var_os("XDG_CONFIG_HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config")));
+            let conf = dir.and_then(|d| fs::read_to_string(d.join("kscreenlockerrc")).ok()).unwrap_or_default();
+            let (auto, timeout, grace) = parse::kscreenlocker(&conf);
+            return crate::autolock::kde(auto, timeout, grace);
+        }
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_uppercase();
+        if !(desktop.contains("GNOME") || desktop.contains("UNITY")) {
+            return Vec::new();
+        }
+        let get = |schema: &str, key: &str| -> Option<String> {
+            let o = Command::new("gsettings").args(["get", schema, key]).output().ok()?;
+            o.status.success().then(|| String::from_utf8_lossy(&o.stdout).into_owned())
+        };
+        let Some(idle) = get("org.gnome.desktop.session", "idle-delay").and_then(|v| parse::gsettings_int(&v)) else {
+            return Vec::new();
+        };
+        let enabled = get("org.gnome.desktop.screensaver", "lock-enabled").and_then(|v| parse::gsettings_bool(&v)).unwrap_or(true);
+        let delay = get("org.gnome.desktop.screensaver", "lock-delay").and_then(|v| parse::gsettings_int(&v)).unwrap_or(0);
+        crate::autolock::gnome(idle, enabled, delay)
+    }
+
+    fn open_system_settings(&self, target: crate::SettingsTarget) {
+        if target != crate::SettingsTarget::KdeScreenLocker {
+            return;
+        }
+        for (cmd, arg) in [
+            ("systemsettings", "kcm_screenlocker"),
+            ("systemsettings5", "kcm_screenlocker"),
+            ("kcmshell6", "kcm_screenlocker"),
+            ("kcmshell5", "screenlocker"),
+        ] {
+            if Command::new(cmd).arg(arg).spawn().is_ok() {
+                return;
+            }
+        }
+    }
+
     fn diagnostics(&self) -> Vec<(String, String)> {
         let idle = match *self.idle_method.lock().unwrap() {
             IdleMethod::Mutter => "그놈 Mutter IdleMonitor",
