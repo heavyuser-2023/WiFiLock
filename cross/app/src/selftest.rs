@@ -174,6 +174,19 @@ impl SelfTest {
             format!("{:?} / {} / 공유기 {}", w.status, w.korean_description(), w.router_mac.as_deref().unwrap_or("-")),
         );
         self.info("위치 권한 상태", format!("{:?}", p.location_status()));
+        let locks = p.system_auto_locks();
+        self.info(
+            "운영체제 자체 잠금 설정 읽기",
+            if locks.is_empty() {
+                "스스로 잠그지 않거나 알 수 없음".to_string()
+            } else {
+                locks
+                    .iter()
+                    .map(|l| format!("{}: {}", wifilock_core::format::duration(l.after_seconds), l.cause))
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            },
+        );
         for (k, v) in p.diagnostics() {
             self.info(&format!("사용하는 방법: {k}"), v);
         }
@@ -552,6 +565,24 @@ impl SelfTest {
             .unwrap_or(false)
     }
 
+    /// 설정 창에 운영체제 잠금 안내가 보이는지(`want`) 화면에서 확인한다: (기대대로인지, 보인 제목)
+    fn page_system_lock(&self, want: bool) -> (bool, String) {
+        let st = state(&self.app);
+        let mut title = String::new();
+        let ok = wait_until(Duration::from_secs(10), || {
+            ui::schedule_refresh(&self.app);
+            std::thread::sleep(Duration::from_millis(300));
+            *lock(&st.page_report) = None;
+            self.eval_settings("window.wifilockTest && window.wifilockTest.report('syslock')");
+            let got = wait_until(Duration::from_secs(2), || lock(&st.page_report).is_some());
+            let r = lock(&st.page_report).clone().unwrap_or_default();
+            let shown = r.pointer("/systemLock/shown").and_then(|v| v.as_bool()).unwrap_or(false);
+            title = r.pointer("/systemLock/title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            got && shown == want && (!want || title.contains("5분"))
+        });
+        (ok, title)
+    }
+
     fn check_settings_window(&mut self) {
         let st = state(&self.app);
         *lock(&st.page_report) = None;
@@ -574,6 +605,21 @@ impl SelfTest {
         }
         let rules = report.get("ruleCount").and_then(|v| v.as_u64()).unwrap_or(0);
         self.check("설정 창에 등록된 네트워크 표시", rules >= 1, format!("{rules}개"));
+
+        // 운영체제가 이 앱보다 먼저 잠그면 설정 창에 안내 (가짜 운영체제 값으로 점검: 5분이면 스스로 잠금)
+        let fake_lock = wifilock_platform::SystemAutoLock {
+            after_seconds: 300,
+            cause: "자가 진단용 운영체제 잠금".into(),
+            setting: Some("자가 진단용 설정".into()),
+            button: Some("설정 열기".into()),
+            target: None,
+        };
+        *lock(&st.system_locks) = (Some(Instant::now()), vec![fake_lock]);
+        let shown = self.page_system_lock(true);
+        self.check("운영체제가 먼저 잠그면 설정 창에 안내", shown.0, shown.1);
+        *lock(&st.system_locks) = (Some(Instant::now()), Vec::new());
+        let hidden = self.page_system_lock(false);
+        self.check("운영체제가 먼저 잠그지 않으면 안내 숨김", hidden.0, hidden.1);
 
         // 화면에서 값을 바꾸면 저장되고 메뉴에 반영된다
         self.eval_settings("window.wifilockTest && window.wifilockTest.setUnknown(600)");

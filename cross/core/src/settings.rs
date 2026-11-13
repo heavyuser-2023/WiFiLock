@@ -148,6 +148,21 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    /// `limit` 초보다 길게(또는 "잠그지 않음"으로) 정한 잠금 시간들: (이름, 초). 위에서부터 규칙, 등록되지 않은 와이파이, 와이파이 없음.
+    /// 운영체제가 `limit` 초면 스스로 잠그는 경우, 이 시간들은 실제로는 `limit` 초가 된다.
+    pub fn timeouts_longer_than(&self, limit: i64) -> Vec<(String, i64)> {
+        let longer = |t: i64| t <= 0 || t > limit;
+        let mut out: Vec<(String, i64)> =
+            self.rules.iter().filter(|r| longer(r.timeout_seconds)).map(|r| (r.name.clone(), r.timeout_seconds)).collect();
+        if longer(self.unknown_wifi_timeout_seconds) {
+            out.push(("등록되지 않은 와이파이".into(), self.unknown_wifi_timeout_seconds));
+        }
+        if longer(self.no_wifi_timeout_seconds) {
+            out.push(("와이파이 없음".into(), self.no_wifi_timeout_seconds));
+        }
+        out
+    }
+
     /// 범위를 벗어난 값을 바로잡는다.
     pub fn clamped(mut self) -> Self {
         self.unknown_wifi_timeout_seconds = self.unknown_wifi_timeout_seconds.max(0);

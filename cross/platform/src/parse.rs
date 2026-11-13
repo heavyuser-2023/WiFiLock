@@ -74,6 +74,86 @@ pub fn ssid_from_bytes(b: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(b).into_owned())
 }
 
+/// 맥 `pmset -g custom`: 전원별("AC Power", "Battery Power", "UPS Power") 디스플레이 끄기 분 (0 = 안 함)
+pub fn pmset_display_sleep(output: &str) -> Vec<(String, i64)> {
+    let mut out = Vec::new();
+    let mut section: Option<String> = None;
+    for line in output.lines() {
+        if !line.starts_with(' ') && line.trim_end().ends_with(':') {
+            section = Some(line.trim().trim_end_matches(':').to_string());
+            continue;
+        }
+        let mut it = line.split_whitespace();
+        if it.next() == Some("displaysleep") {
+            if let (Some(sec), Some(v)) = (section.clone(), it.next().and_then(|v| v.parse::<i64>().ok())) {
+                out.push((sec, v));
+            }
+        }
+    }
+    out
+}
+
+/// 맥 `pmset -g ps` 첫 줄 "Now drawing from 'AC Power'" → "AC Power"
+pub fn pmset_power_source(output: &str) -> Option<String> {
+    let line = output.lines().next()?;
+    let start = line.find('\'')? + 1;
+    let end = start + line[start..].find('\'')?;
+    Some(line[start..end].to_string())
+}
+
+/// 맥 `sysadminctl -screenLock status` (오류 출력에 기록됨).
+/// Some(Some(초)) = 화면 보호기·디스플레이 꺼짐 뒤 그만큼 지나 암호 요구, Some(None) = 암호 요구 안 함, None = 알 수 없음
+pub fn sysadminctl_screen_lock(output: &str) -> Option<Option<i64>> {
+    let line = output.lines().find(|l| l.contains("screenLock"))?;
+    let tail = &line[line.find("screenLock")?..];
+    if tail.contains("is off") {
+        return Some(None);
+    }
+    if tail.contains("immediate") {
+        return Some(Some(0));
+    }
+    let n = tail.split_whitespace().find_map(|w| w.parse::<i64>().ok())?;
+    Some(Some(n))
+}
+
+/// 그놈 `gsettings get` 의 정수 값: "uint32 300" → 300
+pub fn gsettings_int(output: &str) -> Option<i64> {
+    output.split_whitespace().last()?.parse().ok()
+}
+
+/// 그놈 `gsettings get` 의 참·거짓 값
+pub fn gsettings_bool(output: &str) -> Option<bool> {
+    match output.trim() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// KDE `kscreenlockerrc` 의 [Daemon] 값: (화면 자동 잠금, 잠금까지 분, 유예 초). 없으면 KDE 기본값(켜짐, 5분, 5초).
+pub fn kscreenlocker(conf: &str) -> (bool, i64, i64) {
+    let (mut auto, mut timeout, mut grace) = (true, 5, 5);
+    let mut in_daemon = false;
+    for line in conf.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_daemon = line == "[Daemon]";
+            continue;
+        }
+        if !in_daemon {
+            continue;
+        }
+        let Some((k, v)) = line.split_once('=') else { continue };
+        match k.trim() {
+            "Autolock" => auto = v.trim() != "false",
+            "Timeout" => timeout = v.trim().parse().unwrap_or(timeout),
+            "LockGrace" => grace = v.trim().parse().unwrap_or(grace),
+            _ => {}
+        }
+    }
+    (auto, timeout, grace)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +194,27 @@ mod tests {
         assert_eq!(ssid_from_bytes(b"Home").as_deref(), Some("Home"));
         assert_eq!(ssid_from_bytes("우리집".as_bytes()).as_deref(), Some("우리집"));
         assert_eq!(ssid_from_bytes(b""), None);
+    }
+
+    #[test]
+    fn system_lock_settings() {
+        let custom = "Battery Power:\n lessbright            1\n displaysleep         5\nAC Power:\n displaysleep         60\n sleep                0\n";
+        assert_eq!(pmset_display_sleep(custom), vec![("Battery Power".to_string(), 5), ("AC Power".to_string(), 60)]);
+        assert_eq!(
+            pmset_power_source("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%; charged").as_deref(),
+            Some("AC Power")
+        );
+        assert_eq!(pmset_power_source(""), None);
+        let now = "2026-11-13 16:59:00.444 sysadminctl[33955:7180409] ";
+        assert_eq!(sysadminctl_screen_lock(&format!("{now}screenLock delay is immediate")), Some(Some(0)));
+        assert_eq!(sysadminctl_screen_lock(&format!("{now}screenLock delay is 300 seconds")), Some(Some(300)));
+        assert_eq!(sysadminctl_screen_lock(&format!("{now}screenLock is off")), Some(None));
+        assert_eq!(sysadminctl_screen_lock("알 수 없는 출력"), None);
+        assert_eq!(gsettings_int("uint32 300\n"), Some(300));
+        assert_eq!(gsettings_int("0"), Some(0));
+        assert_eq!(gsettings_bool("true\n"), Some(true));
+        assert_eq!(gsettings_bool("No such key"), None);
+        assert_eq!(kscreenlocker(""), (true, 5, 5), "파일이 없으면 KDE 기본값");
+        assert_eq!(kscreenlocker("[Greeter]\nTimeout=99\n[Daemon]\nAutolock=false\nTimeout=15\nLockGrace=0\n"), (false, 15, 0));
     }
 }

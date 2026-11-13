@@ -231,6 +231,14 @@ function render(next) {
   setText("perm-expl", loc.explanation);
   setText("perm-button", loc.button);
 
+  // 운영체제가 이 앱보다 먼저 잠그는 경우
+  const sl = state.systemLock;
+  $("syslock").hidden = !sl;
+  setText("syslock-title", sl ? sl.title : "");
+  setText("syslock-expl", sl ? sl.explanation : "");
+  $("syslock-button").hidden = !(sl && sl.button);
+  setText("syslock-button", (sl && sl.button) || "");
+
   renderRules();
 
   // 기본 잠금 시간
@@ -271,6 +279,7 @@ function sendReport(kind) {
       sections: [...document.querySelectorAll("section > h2")].map((h) => h.textContent),
       ruleCount: document.querySelectorAll("#rules .rule").length,
       ruleNames: [...document.querySelectorAll("#rules .rule input.name")].map((i) => i.value),
+      systemLock: { shown: !$("syslock").hidden, title: $("syslock-title").textContent },
       os: state.os,
     },
   }).catch(() => {});
@@ -296,6 +305,7 @@ function bind() {
   $("add-current").addEventListener("click", () => call("add_current_network"));
   $("add-current-inline").addEventListener("click", () => call("add_current_network"));
   $("perm-button").addEventListener("click", () => invoke("request_location"));
+  $("syslock-button").addEventListener("click", () => invoke("open_system_lock_settings"));
 
   const form = $("add-form");
   const showError = (msg) => {

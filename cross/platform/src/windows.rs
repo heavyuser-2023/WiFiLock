@@ -372,6 +372,22 @@ impl Platform for WindowsPlatform {
         let _ = Command::new("explorer.exe").arg("ms-settings:privacy-location").spawn();
     }
 
+    fn system_auto_locks(&self) -> Vec<crate::SystemAutoLock> {
+        crate::autolock::windows(&autolock_inputs())
+    }
+
+    fn open_system_settings(&self, target: crate::SettingsTarget) {
+        match target {
+            crate::SettingsTarget::WindowsScreenSaver => {
+                let _ = Command::new("control.exe").arg("desk.cpl,,@screensaver").spawn();
+            }
+            crate::SettingsTarget::WindowsPower => {
+                let _ = Command::new("explorer.exe").arg("ms-settings:powersleep").spawn();
+            }
+            _ => {}
+        }
+    }
+
     fn diagnostics(&self) -> Vec<(String, String)> {
         vec![
             ("자리비움 시간".into(), "GetLastInputInfo".into()),
@@ -391,5 +407,179 @@ pub fn test_display_hold(on: bool) {
         } else {
             SetThreadExecutionState(ES_CONTINUOUS);
         }
+    }
+}
+
+// ---------- 윈도우가 스스로 잠그는 설정 ----------
+
+mod syslock {
+    use std::ffi::c_void;
+
+    use windows::core::{GUID, HSTRING};
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::System::Power::{
+        CallNtPowerInformation, GetSystemPowerStatus, PowerGetActiveScheme, PowerReadACValueIndex, PowerReadDCValueIndex,
+        SystemPowerCapabilities, SYSTEM_POWER_CAPABILITIES, SYSTEM_POWER_STATUS,
+    };
+    use windows::Win32::System::Registry::{
+        RegGetValueW, HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+    };
+
+    const SUB_VIDEO: GUID = GUID::from_u128(0x7516b95f_f776_4464_8c53_06167f40cc99);
+    const VIDEOIDLE: GUID = GUID::from_u128(0x3c0bc021_c8a8_4e07_a973_6b14cbcb2b7e);
+    const SUB_SLEEP: GUID = GUID::from_u128(0x238c9fa8_0aad_41ed_83f4_97be242c8f20);
+    const STANDBYIDLE: GUID = GUID::from_u128(0x29f6c1db_86da_48c5_9fdb_f2b67b1f44da);
+    const SUB_NONE: GUID = GUID::from_u128(0xfea3413e_7e05_4911_9a71_700331f1c294);
+    const CONSOLELOCK: GUID = GUID::from_u128(0x0e796bdb_100d_47d6_a2d5_f7d2daa51f51);
+
+    const DESKTOP: &str = "Control Panel\\Desktop";
+    const DESKTOP_POLICY: &str = "Software\\Policies\\Microsoft\\Windows\\Control Panel\\Desktop";
+
+    pub fn reg_string(root: HKEY, key: &str, name: &str) -> Option<String> {
+        let mut buf = [0u16; 512];
+        let mut size = std::mem::size_of_val(&buf) as u32;
+        let r = unsafe {
+            RegGetValueW(
+                root,
+                &HSTRING::from(key),
+                &HSTRING::from(name),
+                RRF_RT_REG_SZ,
+                None,
+                Some(buf.as_mut_ptr() as *mut c_void),
+                Some(&mut size),
+            )
+        };
+        if r.is_err() {
+            return None;
+        }
+        let len = (size as usize / 2).min(buf.len());
+        let s = String::from_utf16_lossy(&buf[..len]);
+        Some(s.trim_end_matches('\0').trim().to_string())
+    }
+
+    pub fn reg_dword(root: HKEY, key: &str, name: &str) -> Option<u32> {
+        let mut v: u32 = 0;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let r = unsafe {
+            RegGetValueW(
+                root,
+                &HSTRING::from(key),
+                &HSTRING::from(name),
+                RRF_RT_REG_DWORD,
+                None,
+                Some(&mut v as *mut u32 as *mut c_void),
+                Some(&mut size),
+            )
+        };
+        r.is_ok().then_some(v)
+    }
+
+    /// 관리 정책 값이 있으면 그것을, 없으면 사용자 값을 쓴다.
+    fn desktop_value(name: &str) -> Option<String> {
+        reg_string(HKEY_CURRENT_USER, DESKTOP_POLICY, name).or_else(|| reg_string(HKEY_CURRENT_USER, DESKTOP, name))
+    }
+
+    /// 화면 보호기가 정해져 있고 켜져 있으면 (시작까지 초, 다시 시작할 때 로그온 화면 표시)
+    pub fn screensaver() -> Option<(i64, bool)> {
+        let exe = desktop_value("SCRNSAVE.EXE").unwrap_or_default();
+        let active = desktop_value("ScreenSaveActive").as_deref() == Some("1");
+        if exe.is_empty() || !active {
+            return None;
+        }
+        let timeout = desktop_value("ScreenSaveTimeOut").and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let secure = desktop_value("ScreenSaverIsSecure").as_deref() == Some("1");
+        Some((timeout, secure))
+    }
+
+    pub fn inactivity_limit() -> Option<i64> {
+        reg_dword(
+            HKEY_LOCAL_MACHINE,
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+            "InactivityTimeoutSecs",
+        )
+        .map(i64::from)
+    }
+
+    /// 모던 스탠바이에서 화면이 꺼진 뒤 로그인을 요구하기까지 더 기다리는 초 (u32 최댓값 = 요구 안 함)
+    pub fn delay_lock_interval() -> Option<u32> {
+        reg_dword(HKEY_CURRENT_USER, DESKTOP, "DelayLockInterval")
+    }
+
+    pub fn on_battery() -> bool {
+        let mut s = SYSTEM_POWER_STATUS::default();
+        unsafe { GetSystemPowerStatus(&mut s) }.is_ok() && s.ACLineStatus == 0
+    }
+
+    pub fn modern_standby() -> bool {
+        let mut caps = SYSTEM_POWER_CAPABILITIES::default();
+        let status = unsafe {
+            CallNtPowerInformation(
+                SystemPowerCapabilities,
+                None,
+                0,
+                Some(&mut caps as *mut _ as *mut c_void),
+                std::mem::size_of::<SYSTEM_POWER_CAPABILITIES>() as u32,
+            )
+        };
+        status.is_ok() && caps.AoAc
+    }
+
+    /// 지금 전원 계획의 값 (전원 연결 / 배터리)
+    pub fn power_value(sub: &GUID, setting: &GUID, battery: bool) -> Option<u32> {
+        unsafe {
+            let mut scheme: *mut GUID = std::ptr::null_mut();
+            if PowerGetActiveScheme(None, &mut scheme).is_err() || scheme.is_null() {
+                return None;
+            }
+            let mut v: u32 = 0;
+            // 두 함수의 반환 형식이 달라(u32 / WIN32_ERROR) 성공 여부만 맞춰 본다.
+            let ok = if battery {
+                PowerReadDCValueIndex(None, Some(scheme), Some(sub), Some(setting), &mut v) == 0
+            } else {
+                PowerReadACValueIndex(None, Some(scheme), Some(sub), Some(setting), &mut v).is_ok()
+            };
+            let _ = LocalFree(Some(HLOCAL(scheme as *mut c_void)));
+            ok.then_some(v)
+        }
+    }
+
+    pub fn video_idle(battery: bool) -> Option<u32> {
+        power_value(&SUB_VIDEO, &VIDEOIDLE, battery)
+    }
+
+    pub fn standby_idle(battery: bool) -> Option<u32> {
+        power_value(&SUB_SLEEP, &STANDBYIDLE, battery)
+    }
+
+    pub fn console_lock(battery: bool) -> Option<u32> {
+        power_value(&SUB_NONE, &CONSOLELOCK, battery)
+    }
+}
+
+/// 윈도우가 스스로 잠그는 데 관계된 값들을 읽는다.
+fn autolock_inputs() -> crate::autolock::WindowsInputs {
+    let battery = syslock::on_battery();
+    let modern_standby = syslock::modern_standby();
+    // 깨어날 때 로그인 요구 (전원 계획 값이 없으면 윈도우 기본값인 "요구함"으로 본다)
+    let console_lock = syslock::console_lock(battery).unwrap_or(1) != 0;
+    let wake_lock_delay = if !console_lock {
+        None
+    } else if modern_standby {
+        match syslock::delay_lock_interval() {
+            Some(u32::MAX) => None,
+            Some(v) => Some(i64::from(v)),
+            None => Some(0),
+        }
+    } else {
+        Some(0)
+    };
+    crate::autolock::WindowsInputs {
+        on_battery: battery,
+        screensaver: syslock::screensaver(),
+        inactivity_limit: syslock::inactivity_limit(),
+        display_off: syslock::video_idle(battery).map(i64::from),
+        sleep_after: syslock::standby_idle(battery).map(i64::from),
+        wake_lock_delay,
+        modern_standby,
     }
 }

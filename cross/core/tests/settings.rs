@@ -176,3 +176,24 @@ fn timeout_presets_include_custom_value() {
     assert_eq!(head, &sorted[..]);
     assert_eq!(TimeoutPresets::warning_including(7), vec![5, 7, 10, 15, 30, 60]);
 }
+
+#[test]
+fn timeouts_longer_than_system_lock() {
+    let (_d, path) = temp_store();
+    let mut store = SettingsStore::open(&path);
+    store.add_rule_ssid("우리집", 3600);
+    store.add_rule_ssid("카페", 300);
+    store.add_rule_ssid("서재", 0);
+    store.update(|s| {
+        s.unknown_wifi_timeout_seconds = 300;
+        s.no_wifi_timeout_seconds = 180;
+    });
+    let s = store.settings();
+    assert_eq!(
+        s.timeouts_longer_than(300),
+        vec![("우리집".to_string(), 3600), ("서재".to_string(), 0)],
+        "같은 시간은 해당 없음, 잠그지 않음은 해당"
+    );
+    assert_eq!(s.timeouts_longer_than(120).len(), 5);
+    assert!(s.timeouts_longer_than(7200).iter().all(|(_, t)| *t == 0));
+}
