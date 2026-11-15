@@ -165,6 +165,18 @@ impl MacPlatform {
     }
 }
 
+/// 화면 보호기 시작 시간이 배경화면 설정에 있는 맥인지.
+/// 최근 맥은 이 항목이 잠금 화면에서 배경화면 설정으로 옮겨졌다(잠금 화면에는 더 이상 보이지 않음).
+/// 운영체제 버전으로 짐작하지 않고, 배경화면 설정 화면의 문구 목록에 그 항목이 있는지로 판단한다.
+fn screensaver_in_wallpaper() -> bool {
+    static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FOUND.get_or_init(|| {
+        const TABLE: &str = "/System/Library/ExtensionKit/Extensions/Wallpaper.appex/Contents/Resources/Localizable.loctable";
+        const KEY: &[u8] = b"START_SCREEN_SAVER_NEVER";
+        std::fs::read(TABLE).map(|b| b.windows(KEY.len()).any(|w| w == KEY)).unwrap_or(false)
+    })
+}
+
 fn lookup_router_mac(iface: &str) -> Option<String> {
     let out = Command::new("/usr/sbin/ipconfig").args(["getoption", iface, "router"]).output().ok()?;
     let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -362,17 +374,22 @@ impl Platform for MacPlatform {
             .find(|(s, _)| *s == source)
             .or(if custom.len() == 1 { custom.first() } else { None })
             .map(|(_, m)| *m);
-        autolock::mac(screensaver, display, power, delay)
+        autolock::mac(screensaver, display, power, delay, screensaver_in_wallpaper())
     }
 
     fn open_system_settings(&self, target: crate::SettingsTarget) {
-        if target != crate::SettingsTarget::MacLockScreen {
-            return;
-        }
-        for url in [
-            "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension",
-            "x-apple.systempreferences:com.apple.preference.security",
-        ] {
+        let urls: &[&str] = match target {
+            crate::SettingsTarget::MacLockScreen => &[
+                "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension",
+                "x-apple.systempreferences:com.apple.preference.security",
+            ],
+            crate::SettingsTarget::MacWallpaper => &[
+                "x-apple.systempreferences:com.apple.Wallpaper-Settings.extension",
+                "x-apple.systempreferences:com.apple.Lock-Screen-Settings.extension",
+            ],
+            _ => return,
+        };
+        for url in urls {
             if Command::new("/usr/bin/open").arg(url).status().map(|s| s.success()).unwrap_or(false) {
                 return;
             }
