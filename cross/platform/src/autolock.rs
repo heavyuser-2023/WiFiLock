@@ -29,6 +29,7 @@ pub struct SystemAutoLock {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTarget {
     MacLockScreen,
+    MacWallpaper,
     WindowsScreenSaver,
     WindowsPower,
     KdeScreenLocker,
@@ -127,16 +128,24 @@ pub enum MacPower {
 /// - `screensaver_idle`: 화면 보호기 시작까지 초 (0·None = 시작 안 함)
 /// - `display_sleep_minutes`: 지금 전원에서 디스플레이 끄기까지 분 (0·None = 끄지 않음)
 /// - `password_delay`: 화면 보호기·디스플레이 꺼짐 뒤 암호 요구까지 초. None 이면 암호를 요구하지 않음
+/// - `screensaver_in_wallpaper`: 화면 보호기 시작 시간이 배경화면 설정에 있는 맥인지
+///   (최근 맥은 잠금 화면에서 배경화면 설정으로 옮겨졌다)
 pub fn mac(
     screensaver_idle: Option<i64>,
     display_sleep_minutes: Option<i64>,
     power: MacPower,
     password_delay: Option<i64>,
+    screensaver_in_wallpaper: bool,
 ) -> Vec<SystemAutoLock> {
     let Some(delay) = password_delay else { return Vec::new() };
     let mut out = Vec::new();
     let button = Some("잠금 화면 설정 열기".to_string());
     if let Some(s) = screensaver_idle.filter(|s| *s > 0) {
+        let (setting, ss_button, target) = if screensaver_in_wallpaper {
+            ("시스템 설정 > 배경화면의 '화면 보호기 시작'", "배경화면 설정 열기", SettingsTarget::MacWallpaper)
+        } else {
+            ("시스템 설정 > 잠금 화면의 '비활성 상태인 경우 화면 보호기 시작'", "잠금 화면 설정 열기", SettingsTarget::MacLockScreen)
+        };
         out.push(SystemAutoLock {
             after_seconds: s + delay.max(0),
             cause: format!(
@@ -144,9 +153,9 @@ pub fn mac(
                 format::duration(s),
                 delay_text(delay)
             ),
-            setting: Some("시스템 설정 > 잠금 화면의 '비활성 상태인 경우 화면 보호기 시작'".into()),
-            button: button.clone(),
-            target: Some(SettingsTarget::MacLockScreen),
+            setting: Some(setting.into()),
+            button: Some(ss_button.into()),
+            target: Some(target),
         });
     }
     if let Some(m) = display_sleep_minutes.filter(|m| *m > 0) {
@@ -279,7 +288,7 @@ mod tests {
 
     #[test]
     fn mac_screensaver_and_display() {
-        let v = mac(Some(300), Some(60), MacPower::Adapter, Some(0));
+        let v = mac(Some(300), Some(60), MacPower::Adapter, Some(0), false);
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].after_seconds, 300);
         assert_eq!(v[0].cause, "입력이 없으면 5분 뒤 화면 보호기가 시작되고 바로 암호를 요구합니다");
@@ -287,18 +296,35 @@ mod tests {
         assert!(v[1].setting.as_deref().unwrap().contains("전원 어댑터 사용 시"));
         assert!(v[1].cause.ends_with("(전원 어댑터 사용 중)"));
 
-        let v = mac(Some(1200), Some(5), MacPower::Battery, Some(60));
+        let v = mac(Some(1200), Some(5), MacPower::Battery, Some(60), false);
         assert_eq!(v[0].after_seconds, 360, "디스플레이 5분 + 암호 요구 1분");
         assert_eq!(v[0].cause, "입력이 없으면 5분 뒤 디스플레이가 꺼지고 1분 뒤 암호를 요구합니다 (배터리 사용 중)");
         assert!(v[0].setting.as_deref().unwrap().contains("'배터리 사용 시 비활성 상태인 경우 디스플레이 끄기'"));
     }
 
     #[test]
+    fn mac_screensaver_in_wallpaper_settings() {
+        // 최근 맥: 화면 보호기 시작 시간은 배경화면 설정에, 디스플레이 끄기는 그대로 잠금 화면 설정에 있다
+        let v = mac(Some(300), Some(5), MacPower::Battery, Some(0), true);
+        assert_eq!(v[0].setting.as_deref(), Some("시스템 설정 > 배경화면의 '화면 보호기 시작'"));
+        assert_eq!(v[0].button.as_deref(), Some("배경화면 설정 열기"));
+        assert_eq!(v[0].target, Some(SettingsTarget::MacWallpaper));
+        assert_eq!(v[1].target, Some(SettingsTarget::MacLockScreen));
+
+        let s = settings_with(&[("우리집", 3600)], 300, 180);
+        let n = note("맥", &v, &s).unwrap();
+        assert!(n.explanation.ends_with(
+            "시스템 설정 > 배경화면의 '화면 보호기 시작', 시스템 설정 > 잠금 화면의 '배터리 사용 시 비활성 상태인 경우 디스플레이 끄기'를 1시간 이상으로 바꿔 주세요."
+        ));
+        assert_eq!(n.button.as_deref(), Some("배경화면 설정 열기"), "먼저 잠그는 설정의 화면을 연다");
+    }
+
+    #[test]
     fn mac_without_password_or_timers() {
-        assert!(mac(Some(300), Some(5), MacPower::Battery, None).is_empty(), "암호를 요구하지 않으면 잠기지 않음");
-        assert!(mac(Some(0), Some(0), MacPower::Adapter, Some(0)).is_empty(), "안 함");
-        assert!(mac(None, None, MacPower::AdapterOnly, Some(0)).is_empty());
-        let v = mac(None, Some(10), MacPower::AdapterOnly, Some(0));
+        assert!(mac(Some(300), Some(5), MacPower::Battery, None, false).is_empty(), "암호를 요구하지 않으면 잠기지 않음");
+        assert!(mac(Some(0), Some(0), MacPower::Adapter, Some(0), false).is_empty(), "안 함");
+        assert!(mac(None, None, MacPower::AdapterOnly, Some(0), false).is_empty());
+        let v = mac(None, Some(10), MacPower::AdapterOnly, Some(0), false);
         assert_eq!(v[0].setting.as_deref(), Some("시스템 설정 > 잠금 화면의 '비활성 상태인 경우 디스플레이 끄기'"));
     }
 
@@ -346,7 +372,7 @@ mod tests {
     #[test]
     fn note_for_shorter_system_lock() {
         let s = settings_with(&[("우리집", 3600), ("카페", 300)], 300, 180);
-        let locks = mac(Some(300), Some(60), MacPower::Adapter, Some(0));
+        let locks = mac(Some(300), Some(60), MacPower::Adapter, Some(0), false);
         let n = note("맥", &locks, &s).expect("우리집 1시간이 5분이 됨");
         assert_eq!(n.title, "맥 설정 때문에 5분이면 잠깁니다");
         assert_eq!(
@@ -357,7 +383,7 @@ mod tests {
         assert_eq!(n.button.as_deref(), Some("잠금 화면 설정 열기"));
 
         // 배터리: 화면 보호기와 디스플레이 끄기 둘 다 5분이면 둘 다 고치라고 알린다
-        let locks = mac(Some(300), Some(5), MacPower::Battery, Some(0));
+        let locks = mac(Some(300), Some(5), MacPower::Battery, Some(0), false);
         let n = note("맥", &locks, &s).unwrap();
         assert!(n.explanation.contains("'비활성 상태인 경우 화면 보호기 시작', 시스템 설정 > 잠금 화면의 '배터리 사용 시 비활성 상태인 경우 디스플레이 끄기'를 1시간 이상으로"));
 
@@ -369,10 +395,10 @@ mod tests {
     #[test]
     fn no_note_when_system_lock_is_longer_or_app_off() {
         let s = settings_with(&[("우리집", 1800)], 300, 180);
-        assert!(note("맥", &mac(Some(3600), Some(60), MacPower::Adapter, Some(0)), &s).is_none());
+        assert!(note("맥", &mac(Some(3600), Some(60), MacPower::Adapter, Some(0), false), &s).is_none());
         assert!(note("맥", &[], &s).is_none());
         let off = AppSettings { enabled: false, ..s.clone() };
-        assert!(note("맥", &mac(Some(300), None, MacPower::Adapter, Some(0)), &off).is_none());
+        assert!(note("맥", &mac(Some(300), None, MacPower::Adapter, Some(0), false), &off).is_none());
     }
 
     #[test]
