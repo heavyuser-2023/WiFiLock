@@ -1,6 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
+use crate::i18n::{self, Lang};
+
 /// 등록한 네트워크의 기본 잠금 시간 (30분)
 pub const DEFAULT_TRUSTED_TIMEOUT: i64 = 1800;
 /// 경고 표시 시간 선택지 (초)
@@ -65,14 +67,24 @@ impl NetworkRule {
         }
     }
 
-    /// 화면에 보여 줄 식별 정보: "와이파이 이름: X · 공유기: …"
+    /// 화면에 보여 줄 식별 정보: "와이파이 이름: X · 공유기: …" / "Wi-Fi Name: X · Router: …"
     pub fn identifier_text(&self) -> String {
+        self.identifier_text_in(i18n::current())
+    }
+
+    pub fn identifier_text_in(&self, lang: Lang) -> String {
         let mut parts = Vec::new();
         if let Some(s) = &self.ssid {
-            parts.push(format!("와이파이 이름: {s}"));
+            parts.push(match lang {
+                Lang::Ko => format!("와이파이 이름: {s}"),
+                Lang::En => format!("Wi-Fi Name: {s}"),
+            });
         }
         if let Some(m) = &self.router_mac {
-            parts.push(format!("공유기: {m}"));
+            parts.push(match lang {
+                Lang::Ko => format!("공유기: {m}"),
+                Lang::En => format!("Router: {m}"),
+            });
         }
         parts.join(" · ")
     }
@@ -99,7 +111,10 @@ impl<'de> Deserialize<'de> for NetworkRule {
             .max(0);
         let mut name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_owned();
         if name.is_empty() {
-            name = ssid.clone().or_else(|| router_mac.clone()).unwrap_or_else(|| "네트워크".into());
+            name = ssid
+                .clone()
+                .or_else(|| router_mac.clone())
+                .unwrap_or_else(|| i18n::pick("네트워크", "Network").into());
         }
         Ok(NetworkRule { id, name, ssid, router_mac, timeout_seconds })
     }
@@ -151,14 +166,18 @@ impl AppSettings {
     /// `limit` 초보다 길게(또는 "잠그지 않음"으로) 정한 잠금 시간들: (이름, 초). 위에서부터 규칙, 등록되지 않은 와이파이, 와이파이 없음.
     /// 운영체제가 `limit` 초면 스스로 잠그는 경우, 이 시간들은 실제로는 `limit` 초가 된다.
     pub fn timeouts_longer_than(&self, limit: i64) -> Vec<(String, i64)> {
+        self.timeouts_longer_than_in(i18n::current(), limit)
+    }
+
+    pub fn timeouts_longer_than_in(&self, lang: Lang, limit: i64) -> Vec<(String, i64)> {
         let longer = |t: i64| t <= 0 || t > limit;
         let mut out: Vec<(String, i64)> =
             self.rules.iter().filter(|r| longer(r.timeout_seconds)).map(|r| (r.name.clone(), r.timeout_seconds)).collect();
         if longer(self.unknown_wifi_timeout_seconds) {
-            out.push(("등록되지 않은 와이파이".into(), self.unknown_wifi_timeout_seconds));
+            out.push((lang.pick("등록되지 않은 와이파이", "Unregistered Wi-Fi").into(), self.unknown_wifi_timeout_seconds));
         }
         if longer(self.no_wifi_timeout_seconds) {
-            out.push(("와이파이 없음".into(), self.no_wifi_timeout_seconds));
+            out.push((lang.pick("와이파이 없음", "No Wi-Fi").into(), self.no_wifi_timeout_seconds));
         }
         out
     }
@@ -173,7 +192,11 @@ impl AppSettings {
             r.ssid = non_empty(r.ssid.take());
             r.router_mac = r.router_mac.as_deref().and_then(mac_normalize);
             if r.name.trim().is_empty() {
-                r.name = r.ssid.clone().or_else(|| r.router_mac.clone()).unwrap_or_else(|| "네트워크".into());
+                r.name = r
+                    .ssid
+                    .clone()
+                    .or_else(|| r.router_mac.clone())
+                    .unwrap_or_else(|| i18n::pick("네트워크", "Network").into());
             }
         }
         self

@@ -1,15 +1,18 @@
 import AppKit
+import WiFiLockCore
 
 /// 잠금 직전 화면 위쪽 가운데에 뜨는 경고 창
 final class WarningHUD {
     private var panel: NSPanel?
     private let titleLabel = NSTextField(labelWithString: "")
-    private let detailLabel = NSTextField(labelWithString: "마우스나 키보드를 움직이면 취소됩니다")
+    private let detailLabel = NSTextField(
+        labelWithString: AppLang.pick("마우스나 키보드를 움직이면 취소됩니다", "Move the mouse or press any key to cancel")
+    )
     private(set) var isVisible = false
 
     func show(remaining: TimeInterval) {
         let secs = max(1, Int(remaining.rounded(.up)))
-        titleLabel.stringValue = "\(secs)초 후 화면이 잠깁니다"
+        titleLabel.stringValue = AppLang.isKo ? "\(secs)초 후 화면이 잠깁니다" : "Locking screen in \(secs)s"
         if panel == nil { build() }
         guard let panel else { return }
         if !isVisible {
@@ -64,7 +67,7 @@ final class WarningHUD {
         blur.layer?.masksToBounds = true
 
         let icon = NSImageView()
-        icon.image = NSImage(systemSymbolName: "lock.display", accessibilityDescription: "화면 잠금")?
+        icon.image = NSImage(systemSymbolName: "lock.display", accessibilityDescription: AppLang.pick("화면 잠금", "Screen Lock"))?
             .withSymbolConfiguration(.init(pointSize: 28, weight: .medium))
         icon.contentTintColor = .systemOrange
         icon.translatesAutoresizingMaskIntoConstraints = false

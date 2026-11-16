@@ -1,6 +1,6 @@
 use wifilock_core::{
-    mac_normalize, AppSettings, LockPolicy, NetworkRule, PolicyResolver, PolicySource, PolicyStabilizer, WiFiSnapshot,
-    WiFiStatus,
+    mac_normalize, AppSettings, Lang, LockPolicy, NetworkRule, PolicyResolver, PolicySource, PolicyStabilizer,
+    WiFiSnapshot, WiFiStatus,
 };
 
 fn home() -> NetworkRule {
@@ -160,6 +160,22 @@ fn snapshot_descriptions() {
     assert_eq!(WiFiSnapshot::status(WiFiStatus::PoweredOff).korean_description(), "와이파이 꺼짐");
     assert_eq!(WiFiSnapshot::connected(Some("Home"), None).korean_description(), "Home");
     assert_eq!(WiFiSnapshot::connected(None, None).korean_description(), "이름 확인 불가 (권한 필요)");
+}
+
+#[test]
+fn english_descriptions_and_make_rule() {
+    assert_eq!(WiFiSnapshot::status(WiFiStatus::Unavailable).description_in(Lang::En), "No Wi-Fi hardware");
+    assert_eq!(WiFiSnapshot::status(WiFiStatus::PoweredOff).description_in(Lang::En), "Wi-Fi Off");
+    assert_eq!(WiFiSnapshot::status(WiFiStatus::Disconnected).description_in(Lang::En), "Not Connected");
+    assert_eq!(
+        WiFiSnapshot::connected(None, None).description_in(Lang::En),
+        "Name unavailable (permission required)"
+    );
+    assert_eq!(PolicySource::UnknownWiFi.description_in(Lang::En), "Unregistered Wi-Fi");
+    assert_eq!(PolicySource::NoWiFi.description_in(Lang::En), "No Wi-Fi connection");
+    let rule = PolicyResolver::make_rule_in(Lang::En, &WiFiSnapshot::connected(None, Some("1:2:3:4:5:6")), Some(600)).unwrap();
+    assert_eq!(rule.name, "Router 01:02:03:04:05:06");
+    assert_eq!(PolicySource::Rule { rule }.description_in(Lang::En), "Registered network 'Router 01:02:03:04:05:06'");
 }
 
 // ---- 순간 끊김 대비 (검토에서 찾은 결함: 2~3초 끊겨도 짧은 잠금 시간이 바로 적용됐다) ----

@@ -6,7 +6,7 @@
 use serde::Serialize;
 use tauri::image::Image;
 use tauri::{AppHandle, Emitter, Manager};
-use wifilock_core::format;
+use wifilock_core::{format, i18n, Lang};
 use wifilock_core::{AppSettings, EngineState, LockStatus, PolicyResolver, PolicySource, TimeoutPresets, WiFiSnapshot};
 use wifilock_platform::{LocationStatus, SystemLockNote};
 
@@ -26,6 +26,7 @@ pub enum IconKind {
 /// 메뉴 구조를 바꿔야 하는 값들 (바뀌면 메뉴를 새로 만든다)
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MenuStructure {
+    pub lang: Option<Lang>,
     pub enabled: bool,
     pub paused: bool,
     pub show_permission: bool,
@@ -48,23 +49,41 @@ pub struct UiSnapshot {
 }
 
 pub fn network_text(snap: &WiFiSnapshot) -> String {
-    let mut s = format!("와이파이: {}", snap.korean_description());
+    let ko = i18n::is_ko();
+    let mut s = if ko {
+        format!("와이파이: {}", snap.korean_description())
+    } else {
+        format!("Wi-Fi: {}", snap.korean_description())
+    };
     if snap.is_connected() && snap.ssid.is_none() {
         if let Some(mac) = &snap.router_mac {
-            s.push_str(&format!(" · 공유기 {mac}"));
+            s.push_str(&if ko { format!(" · 공유기 {mac}") } else { format!(" · Router {mac}") });
         }
     }
     s
 }
 
 pub fn policy_text(st: &LockStatus) -> String {
-    let source = match &st.policy.source {
-        PolicySource::Rule { rule } => format!("등록된 네트워크 '{}'", rule.name),
-        PolicySource::UnknownWiFi => "등록되지 않은 네트워크".into(),
-        PolicySource::NoWiFi => "와이파이 연결 없음".into(),
+    let ko = i18n::is_ko();
+    let source = match (&st.policy.source, ko) {
+        (PolicySource::Rule { rule }, true) => format!("등록된 네트워크 '{}'", rule.name),
+        (PolicySource::UnknownWiFi, true) => "등록되지 않은 네트워크".into(),
+        (PolicySource::NoWiFi, true) => "와이파이 연결 없음".into(),
+        (PolicySource::Rule { rule }, false) => format!("Registered network '{}'", rule.name),
+        (PolicySource::UnknownWiFi, false) => "Unregistered network".into(),
+        (PolicySource::NoWiFi, false) => "No Wi-Fi connection".into(),
     };
-    let pending = if st.policy_change_pending { " · 연결 변화 확인 중" } else { "" };
-    format!("잠금 시간: {} ({source}){pending}", format::timeout(st.policy.timeout_seconds))
+    let pending = if st.policy_change_pending {
+        i18n::pick(" · 연결 변화 확인 중", " · Checking connection change")
+    } else {
+        ""
+    };
+    let time = format::timeout(st.policy.timeout_seconds);
+    if ko {
+        format!("잠금 시간: {time} ({source}){pending}")
+    } else {
+        format!("Lock Time: {time} ({source}){pending}")
+    }
 }
 
 /// 현재 네트워크를 등록할 수 있는지 (이미 등록됐으면 false, 이름을 몰랐던 규칙에 이름을 채울 수 있으면 true)
@@ -95,12 +114,14 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
     };
     let state_text = format::state_text(&status.state);
     let policy = policy_text(&status);
+    let ko = i18n::is_ko();
+    let app_name = i18n::pick("와이파이 잠금", "WiFiLock");
     // 마우스를 올렸을 때 보이는 도움말에는 매 초 바뀌는 남은 시간을 넣지 않는다.
     // 도움말을 바꿀 때마다 메뉴 막대가 아이콘 크기를 다시 계산하기 때문이다 (남은 시간은 메뉴에서 보인다).
     let tooltip = match status.state {
-        EngineState::Counting { .. } => format!("와이파이 잠금 — {policy}"),
-        EngineState::Warning { .. } => "와이파이 잠금 — 곧 잠김".to_string(),
-        ref other => format!("와이파이 잠금 — {}", format::state_text(other)),
+        EngineState::Counting { .. } => format!("{app_name} — {policy}"),
+        EngineState::Warning { .. } => format!("{app_name} — {}", i18n::pick("곧 잠김", "Locking soon")),
+        ref other => format!("{app_name} — {}", format::state_text(other)),
     };
     // 메뉴 막대 글자는 바뀔 때만 다시 그린다 (apply). 분 단위면 마지막 1분 전까지는 1분에 한 번만 바뀐다.
     let title = if settings.show_countdown_in_menu_bar && cfg!(any(target_os = "macos", target_os = "linux")) {
@@ -117,9 +138,13 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         let name = snap
             .ssid
             .clone()
-            .or_else(|| snap.router_mac.as_ref().map(|m| format!("공유기 {m}")))
+            .or_else(|| snap.router_mac.as_ref().map(|m| if ko { format!("공유기 {m}") } else { format!("Router {m}") }))
             .unwrap_or_default();
-        Some(format!("현재 네트워크({name})를 등록"))
+        Some(if ko {
+            format!("현재 네트워크({name})를 등록")
+        } else {
+            format!("Add Current Network ({name})")
+        })
     } else {
         None
     };
@@ -142,6 +167,7 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         policy,
         state: state_text,
         structure: MenuStructure {
+            lang: Some(i18n::current()),
             enabled: settings.enabled,
             paused: status.paused,
             show_permission: snap.is_connected() && !location.has_permission(),
@@ -256,6 +282,7 @@ pub struct Choice {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct UiState {
+    pub lang: &'static str,
     pub os: &'static str,
     pub version: String,
     pub dry_run: bool,
@@ -282,8 +309,9 @@ pub struct UiState {
 
 fn location_info(os: &str, status: LocationStatus, snap: &WiFiSnapshot) -> LocationInfo {
     let needs = snap.is_connected() && !status.has_permission();
-    let (title, explanation, button) = match os {
-        "macos" => {
+    let ko = i18n::is_ko();
+    let (title, explanation, button) = match (os, ko) {
+        ("macos", true) => {
             let head = "macOS 는 위치 권한을 받은 앱에만 와이파이 이름을 알려 줍니다. ";
             let tail = " 위치 정보는 와이파이 이름 확인에만 쓰며 저장하거나 밖으로 보내지 않습니다.";
             let mid = if snap.router_mac.is_some() {
@@ -297,10 +325,29 @@ fn location_info(os: &str, status: LocationStatus, snap: &WiFiSnapshot) -> Locat
                 if status == LocationStatus::NotDetermined { "위치 권한 요청" } else { "시스템 설정에서 허용하기" }.to_string(),
             )
         }
-        "windows" => (
+        ("macos", false) => {
+            let head = "macOS only shares Wi-Fi network names with apps that have Location permission. ";
+            let tail = " Location data is used solely to check the Wi-Fi name and is never stored or sent anywhere.";
+            let mid = if snap.router_mac.is_some() {
+                "Currently distinguishing networks by router MAC address; grant permission to identify networks by Wi-Fi name."
+            } else {
+                "Without permission, only 'Wi-Fi connected' and 'Not connected' are distinguished using default timeouts. Grant permission to set per-network timeouts."
+            };
+            (
+                "Location permission required to read Wi-Fi name".to_string(),
+                format!("{head}{mid}{tail}"),
+                if status == LocationStatus::NotDetermined { "Request Location Permission" } else { "Allow in System Settings" }.to_string(),
+            )
+        }
+        ("windows", true) => (
             "위치 권한이 꺼져 있어 와이파이 이름을 읽을 수 없습니다".to_string(),
             "윈도우 11 24H2 부터는 위치 권한을 허용한 앱만 와이파이 이름을 읽을 수 있습니다. 설정 > 개인 정보 및 보안 > 위치에서 '위치 서비스'와 '데스크톱 앱이 위치에 액세스하도록 허용'을 켜 주세요. 그 전에는 공유기 주소로 네트워크를 구분합니다.".to_string(),
             "위치 설정 열기".to_string(),
+        ),
+        ("windows", false) => (
+            "Location permission is off; cannot read Wi-Fi name".to_string(),
+            "Starting with Windows 11 24H2, apps need Location permission to read Wi-Fi names. Turn on 'Location services' and 'Let desktop apps access your location' under Settings > Privacy & security > Location. Until then, networks are identified by router MAC address.".to_string(),
+            "Open Location Settings".to_string(),
         ),
         _ => (String::new(), String::new(), String::new()),
     };
@@ -314,6 +361,7 @@ pub fn ui_state(app: &AppHandle) -> UiState {
     let location = *lock(&st.location);
     let wifi = status.snapshot.clone();
     let os = st.platform.os();
+    let ko = i18n::is_ko();
 
     let mut values: Vec<i64> = TimeoutPresets::ALL.to_vec();
     values.push(settings.unknown_wifi_timeout_seconds);
@@ -328,23 +376,35 @@ pub fn ui_state(app: &AppHandle) -> UiState {
         .collect();
 
     let current_rule_id = PolicyResolver::matching_rule(&wifi, &settings.rules).map(|r| r.id.to_string());
-    let router_text = if wifi.is_connected() { wifi.router_mac.as_ref().map(|m| format!("공유기 주소 {m}")) } else { None };
-    let holders_note = match os {
-        "windows" => "윈도우에서는 어떤 앱이 화면 유지를 요청했는지 이름까지는 알 수 없습니다.",
-        "linux" => "그놈·KDE 등 데스크톱이 알려 주는 화면 유지 요청을 따릅니다.",
+    let router_text = if wifi.is_connected() {
+        wifi.router_mac
+            .as_ref()
+            .map(|m| if ko { format!("공유기 주소 {m}") } else { format!("Router MAC {m}") })
+    } else {
+        None
+    };
+    let holders_note = match (os, ko) {
+        ("windows", true) => "윈도우에서는 어떤 앱이 화면 유지를 요청했는지 이름까지는 알 수 없습니다.",
+        ("windows", false) => "On Windows, the specific app keeping the screen awake cannot be identified.",
+        ("linux", true) => "그놈·KDE 등 데스크톱이 알려 주는 화면 유지 요청을 따릅니다.",
+        ("linux", false) => "Follows display sleep requests reported by GNOME, KDE, or systemd.",
         _ => "",
     }
     .to_string();
     let autostart = crate::autostart_enabled(app);
     let autostart_error = lock(&st.autostart_error).clone();
-    let os_name = match os {
-        "macos" => "맥",
-        "windows" => "윈도우",
-        _ => "데스크톱",
+    let os_name = match (os, ko) {
+        ("macos", true) => "맥",
+        ("macos", false) => "macOS",
+        ("windows", true) => "윈도우",
+        ("windows", false) => "Windows",
+        (_, true) => "데스크톱",
+        (_, false) => "Desktop",
     };
     let system_lock = wifilock_platform::autolock::note(os_name, &lock(&st.system_locks).1, &settings);
 
     UiState {
+        lang: i18n::code(),
         os,
         version: app.package_info().version.to_string(),
         dry_run: st.opts.dry_run,
@@ -353,11 +413,11 @@ pub fn ui_state(app: &AppHandle) -> UiState {
         location: location_info(os, location, &wifi),
         wifi_text: wifi.korean_description(),
         router_text,
-        policy_text: format!(
-            "지금 적용: {} · {}",
-            format::timeout(status.policy.timeout_seconds),
-            status.policy.source.korean_description()
-        ),
+        policy_text: if ko {
+            format!("지금 적용: {} · {}", format::timeout(status.policy.timeout_seconds), status.policy.source.korean_description())
+        } else {
+            format!("Current policy: {} · {}", format::timeout(status.policy.timeout_seconds), status.policy.source.korean_description())
+        },
         state_text: format::state_text(&status.state),
         wifi,
         settings,

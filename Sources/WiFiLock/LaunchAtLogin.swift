@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import ServiceManagement
+import WiFiLockCore
 
 /// 로그인 시 자동 실행 (macOS 13 이상의 로그인 항목)
 final class LaunchAtLogin: ObservableObject {
@@ -26,7 +27,9 @@ final class LaunchAtLogin: ObservableObject {
             lastError = nil
             AppLog.info("로그인 시 자동 실행: \(enabled)")
         } catch {
-            lastError = "로그인 항목을 바꾸지 못했습니다: \(error.localizedDescription)"
+            lastError = AppLang.isKo
+                ? "로그인 항목을 바꾸지 못했습니다: \(error.localizedDescription)"
+                : "Failed to update launch at login: \(error.localizedDescription)"
             AppLog.error(lastError!)
         }
         refresh()

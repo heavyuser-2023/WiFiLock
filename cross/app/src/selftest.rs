@@ -141,8 +141,14 @@ impl SelfTest {
     }
 
     fn run(&mut self) {
+        // 자가 진단은 영문 빌드 서버에서도 한국어 기준 시나리오가 돌도록 Ko 로 맞춘 뒤, 영어 전환도 함께 확인한다.
+        wifilock_core::i18n::set(wifilock_core::Lang::Ko);
+        let a = self.app.clone();
+        main_sync(&self.app, move || ui::refresh_now(&a));
+
         self.check_system();
         self.check_tray_and_menu();
+        self.check_english_menu();
         self.check_menu_actions();
         self.check_real_display_hold();
         self.check_engine_and_hud();
@@ -284,6 +290,25 @@ impl SelfTest {
         self.check("메뉴에 네트워크 표시", network.starts_with("와이파이:"), network.clone());
         self.check("메뉴에 잠금 시간 표시", policy.starts_with("잠금 시간:"), policy.clone());
         self.check("'자동 잠금 사용' 체크 표시", enabled, "");
+    }
+
+    fn check_english_menu(&mut self) {
+        wifilock_core::i18n::set(wifilock_core::Lang::En);
+        let a = self.app.clone();
+        main_sync(&self.app, move || ui::refresh_now(&a));
+        let (network, policy, _state, enabled, ids) = self.menu_texts();
+        let has_all = ["lock-now", "enabled", "pause", "settings", "about", "quit"]
+            .iter()
+            .all(|id| ids.iter().any(|i| i == id));
+        self.check(
+            "영어 모드 전환 시 메뉴 표시",
+            has_all && enabled && network.starts_with("Wi-Fi:") && policy.starts_with("Lock Time:"),
+            format!("{network} / {policy}"),
+        );
+        // 이후 한국어 시나리오 점검을 위해 복원
+        wifilock_core::i18n::set(wifilock_core::Lang::Ko);
+        let a = self.app.clone();
+        main_sync(&self.app, move || ui::refresh_now(&a));
     }
 
     // ---------- 3. 메뉴 동작 (가짜 입력으로) ----------

@@ -44,6 +44,21 @@ use crate::{LocationStatus, Platform};
 
 const IF_TYPE_IEEE80211: u32 = 71;
 
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetUserDefaultUILanguage() -> u16;
+}
+
+/// 윈도우 기본 UI 언어가 한국어(LANG_KOREAN = 0x12)면 `Ko`, 아니면 `En`.
+pub fn system_lang() -> wifilock_core::Lang {
+    let lang_id = unsafe { GetUserDefaultUILanguage() };
+    if (lang_id & 0x3ff) == 0x12 {
+        wifilock_core::Lang::Ko
+    } else {
+        wifilock_core::i18n::detect_from_env().unwrap_or(wifilock_core::Lang::En)
+    }
+}
+
 /// QueryUnbiasedInterruptTime 은 잠자기·최대 절전 동안 멈추고, GetTickCount64 는 계속 흐른다.
 pub fn clocks() -> crate::Clocks {
     unsafe {
@@ -308,7 +323,7 @@ impl Platform for WindowsPlatform {
             )
         };
         if status.is_ok() && state & ES_DISPLAY_REQUIRED.0 != 0 {
-            vec!["다른 앱".to_string()]
+            vec![wifilock_core::i18n::pick("다른 앱", "Another app").to_string()]
         } else {
             Vec::new()
         }

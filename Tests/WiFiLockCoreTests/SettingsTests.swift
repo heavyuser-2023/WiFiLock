@@ -121,4 +121,20 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(WiFiSnapshot(status: .connected, ssid: "Home").koreanDescription, "Home")
         XCTAssertEqual(WiFiSnapshot(status: .connected).koreanDescription, "이름 확인 불가 (위치 권한 필요)")
     }
+
+    func testEnglishFormattingAndLocaleParsing() {
+        XCTAssertEqual(AppLang.parse("ko_KR.UTF-8"), .ko)
+        XCTAssertEqual(AppLang.parse("ko-Kore-KR"), .ko)
+        XCTAssertEqual(AppLang.parse("en-US"), .en)
+        XCTAssertEqual(AppLang.parse("ja-JP"), .en)
+        XCTAssertNil(AppLang.parse(" "))
+
+        XCTAssertEqual(KoreanFormat.timeout(0, lang: .en), "Never")
+        XCTAssertEqual(KoreanFormat.timeout(90, lang: .en), "1 min 30 sec")
+        XCTAssertEqual(KoreanFormat.timeout(3600, lang: .en), "1 hr")
+        let date = Date(timeIntervalSince1970: 0) // 1970-01-01 09:00 KST
+        XCTAssertEqual(KoreanFormat.clock(date, lang: .en, timeZone: TimeZone(identifier: "Asia/Seoul")!), "9:00 AM")
+        XCTAssertEqual(WiFiSnapshot(status: .poweredOff).description(in: .en), "Wi-Fi Off")
+        XCTAssertEqual(PolicySource.unknownWiFi.description(in: .en), "Unregistered Wi-Fi")
+    }
 }

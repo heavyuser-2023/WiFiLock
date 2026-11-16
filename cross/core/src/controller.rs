@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::format;
+use crate::i18n;
 use crate::policy::{LockPolicy, PolicyResolver, PolicySource, WiFiSnapshot};
 use crate::scheduler::{EngineState, LockScheduler, TickInput, TickOutput};
 use crate::settings::AppSettings;
@@ -216,12 +217,21 @@ impl Controller {
                 };
                 output = self.scheduler.tick(&tick_input);
                 if output.should_lock {
-                    lock_reason = Some(format!(
-                        "{}, 자리비움 {}초 ≥ {}",
-                        policy.source.korean_description(),
-                        idle as i64,
-                        format::timeout(policy.timeout_seconds)
-                    ));
+                    lock_reason = Some(if i18n::is_ko() {
+                        format!(
+                            "{}, 자리비움 {}초 ≥ {}",
+                            policy.source.korean_description(),
+                            idle as i64,
+                            format::timeout(policy.timeout_seconds)
+                        )
+                    } else {
+                        format!(
+                            "{}, idle {}s ≥ {}",
+                            policy.source.korean_description(),
+                            idle as i64,
+                            format::timeout(policy.timeout_seconds)
+                        )
+                    });
                 }
             }
         }

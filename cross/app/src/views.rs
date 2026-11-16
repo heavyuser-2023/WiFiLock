@@ -1,6 +1,7 @@
 //! 설정 창과 잠금 직전 경고 창
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use wifilock_core::i18n;
 
 use crate::logging;
 use crate::state::{lock, state};
@@ -13,14 +14,17 @@ const HUD_H: f64 = 84.0;
 /// 설정 창을 연다 (이미 열려 있으면 앞으로 가져온다).
 pub fn open_settings(app: &AppHandle) {
     activate_app(app);
+    let title = i18n::pick("와이파이 잠금 설정", "WiFiLock Settings");
     if let Some(w) = app.get_webview_window(SETTINGS) {
+        let _ = w.set_title(title);
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
         return;
     }
-    let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App("settings.html".into()))
-        .title("와이파이 잠금 설정")
+    let url = format!("settings.html?lang={}", i18n::code());
+    let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App(url.into()))
+        .title(title)
         .inner_size(640.0, 820.0)
         .min_inner_size(520.0, 480.0)
         .resizable(true)
@@ -118,8 +122,10 @@ pub fn manage_idle_hud(app: &AppHandle, near_lock: bool) {
 
 /// 경고 창을 보이지 않게 만든다 (주 스레드).
 fn create_hud(app: &AppHandle) {
-    let built = WebviewWindowBuilder::new(app, HUD, WebviewUrl::App("hud.html".into()))
-        .title("와이파이 잠금 경고")
+    let url = format!("hud.html?lang={}", i18n::code());
+    let title = i18n::pick("와이파이 잠금 경고", "WiFiLock Warning");
+    let built = WebviewWindowBuilder::new(app, HUD, WebviewUrl::App(url.into()))
+        .title(title)
         .inner_size(HUD_W, HUD_H)
         .decorations(false)
         .transparent(true)

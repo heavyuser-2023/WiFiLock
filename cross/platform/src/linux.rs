@@ -71,6 +71,25 @@ fn proxy<'a>(conn: &'a Connection, dest: &'a str, path: &'a str, iface: &'a str)
         .build()
 }
 
+/// 리눅스 환경 변수 및 `/etc/locale.conf` 로 시스템 언어를 판별한다.
+pub fn system_lang() -> wifilock_core::Lang {
+    if let Some(lang) = wifilock_core::i18n::detect_from_env() {
+        return lang;
+    }
+    if let Ok(conf) = fs::read_to_string("/etc/locale.conf") {
+        for line in conf.lines() {
+            let trimmed = line.trim();
+            if let Some(val) = trimmed.strip_prefix("LC_MESSAGES=").or_else(|| trimmed.strip_prefix("LANG=")) {
+                let clean = val.trim().trim_matches('"').trim_matches('\'');
+                if let Some(lang) = wifilock_core::i18n::parse_locale_tag(clean) {
+                    return lang;
+                }
+            }
+        }
+    }
+    wifilock_core::Lang::En
+}
+
 fn is_kde() -> bool {
     std::env::var("XDG_CURRENT_DESKTOP").map(|v| v.to_uppercase().contains("KDE")).unwrap_or(false)
 }
@@ -162,13 +181,14 @@ impl LinuxPlatform {
                 continue;
             }
             let app: String = ip.call("GetAppId", &()).unwrap_or_default();
-            let name = if app.is_empty() { "다른 앱".to_string() } else { app.trim_end_matches(".desktop").to_string() };
+            let other = wifilock_core::i18n::pick("다른 앱", "Another app");
+            let name = if app.is_empty() { other.to_string() } else { app.trim_end_matches(".desktop").to_string() };
             if !names.contains(&name) {
                 names.push(name);
             }
         }
         if names.is_empty() {
-            names.push("다른 앱".into());
+            names.push(wifilock_core::i18n::pick("다른 앱", "Another app").into());
         }
         Some(names)
     }
@@ -212,7 +232,7 @@ impl LinuxPlatform {
             }
         }
         if names.is_empty() {
-            names.push("다른 앱".into());
+            names.push(wifilock_core::i18n::pick("다른 앱", "Another app").into());
         }
         Some(names)
     }

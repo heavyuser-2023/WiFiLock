@@ -79,6 +79,28 @@ pub trait Platform: Send + Sync {
     fn diagnostics(&self) -> Vec<(String, String)>;
 }
 
+/// 운영체제 환경 설정(로케일·선호 언어)에 따른 앱 표시 언어.
+/// `WIFILOCK_LANG` 환경 변수가 있으면 최우선으로 따른다.
+pub fn system_lang() -> wifilock_core::Lang {
+    if let Ok(v) = std::env::var("WIFILOCK_LANG") {
+        if let Some(lang) = wifilock_core::i18n::parse_locale_tag(&v) {
+            return lang;
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        macos::system_lang()
+    }
+    #[cfg(windows)]
+    {
+        windows::system_lang()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::system_lang()
+    }
+}
+
 /// 단조 시계 두 개 (초). 벽시계와 달리 사용자가 시각을 바꿔도 흔들리지 않는다.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Clocks {
