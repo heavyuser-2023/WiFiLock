@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        AppLang.current = options.lang ?? (options.selfTestDir != nil ? .ko : AppLang.detectSystem())
         if let path = options.logFile { AppLog.fileURL = URL(fileURLWithPath: path) }
         AppLog.info("시작: 버전 \(AppInfo.version), 시험 모드 \(options.dryRun), 자가 진단 \(options.selfTestDir != nil)")
 
@@ -120,7 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showAbout() {
         NSApp.activate(ignoringOtherApps: true)
         let credits = NSAttributedString(
-            string: "와이파이 연결 상태에 따라 자동 잠금 시간을 바꿔 주는 메뉴 막대 앱입니다.\n등록한 네트워크에서는 길게, 낯선 곳에서는 짧게 잠급니다.",
+            string: AppLang.pick(
+                "와이파이 연결 상태에 따라 자동 잠금 시간을 바꿔 주는 메뉴 막대 앱입니다.\n등록한 네트워크에서는 길게, 낯선 곳에서는 짧게 잠급니다.",
+                "A menu bar app that adjusts your automatic screen lock timeout based on Wi-Fi status.\nLonger on trusted networks, shorter on unknown networks."
+            ),
             attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]
         )
         NSApp.orderFrontStandardAboutPanel(options: [
@@ -138,33 +142,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 메뉴 막대 앱이라도 입력 칸에서 ⌘C·⌘V 등이 동작하려면 편집 메뉴가 있어야 한다.
     private func setupMainMenu() {
         let main = NSMenu()
+        let p: (String, String) -> String = { AppLang.pick($0, $1) }
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "\(AppInfo.displayName) 정보", action: #selector(aboutFromMenu), keyEquivalent: "").target = self
+        appMenu.addItem(withTitle: p("\(AppInfo.displayName) 정보", "About \(AppInfo.displayName)"), action: #selector(aboutFromMenu), keyEquivalent: "").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "설정…", action: #selector(settingsFromMenu), keyEquivalent: ",").target = self
+        appMenu.addItem(withTitle: p("설정…", "Settings…"), action: #selector(settingsFromMenu), keyEquivalent: ",").target = self
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "종료", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: p("종료", "Quit"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         main.addItem(appItem)
 
         let editItem = NSMenuItem()
-        let edit = NSMenu(title: "편집")
-        edit.addItem(withTitle: "실행 취소", action: Selector(("undo:")), keyEquivalent: "z")
-        edit.addItem(withTitle: "실행 복귀", action: Selector(("redo:")), keyEquivalent: "Z")
+        let edit = NSMenu(title: p("편집", "Edit"))
+        edit.addItem(withTitle: p("실행 취소", "Undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        edit.addItem(withTitle: p("실행 복귀", "Redo"), action: Selector(("redo:")), keyEquivalent: "Z")
         edit.addItem(.separator())
-        edit.addItem(withTitle: "오려두기", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: "복사하기", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "붙여넣기", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        edit.addItem(withTitle: "전체 선택", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: p("오려두기", "Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: p("복사하기", "Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: p("붙여넣기", "Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: p("전체 선택", "Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
         main.addItem(editItem)
 
         let windowItem = NSMenuItem()
-        let windowMenu = NSMenu(title: "윈도우")
-        windowMenu.addItem(withTitle: "닫기", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
-        windowMenu.addItem(withTitle: "최소화", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        let windowMenu = NSMenu(title: p("윈도우", "Window"))
+        windowMenu.addItem(withTitle: p("닫기", "Close"), action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        windowMenu.addItem(withTitle: p("최소화", "Minimize"), action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowItem.submenu = windowMenu
         main.addItem(windowItem)
 

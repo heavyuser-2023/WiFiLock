@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::{self, Lang};
 use crate::settings::{mac_normalize, AppSettings, NetworkRule, DEFAULT_TRUSTED_TIMEOUT};
 
 /// 와이파이 연결 상태
@@ -63,13 +64,24 @@ impl WiFiSnapshot {
 
     /// 메뉴에 보여 줄 연결 상태 문구
     pub fn korean_description(&self) -> String {
-        match self.status {
-            WiFiStatus::Unavailable => "와이파이 장치 없음".into(),
-            WiFiStatus::PoweredOff => "와이파이 꺼짐".into(),
-            WiFiStatus::Disconnected => "와이파이 연결 안 됨".into(),
-            WiFiStatus::Connected => match &self.ssid {
+        self.description_in(i18n::current())
+    }
+
+    pub fn description_in(&self, lang: Lang) -> String {
+        match (lang, self.status) {
+            (Lang::Ko, WiFiStatus::Unavailable) => "와이파이 장치 없음".into(),
+            (Lang::Ko, WiFiStatus::PoweredOff) => "와이파이 꺼짐".into(),
+            (Lang::Ko, WiFiStatus::Disconnected) => "와이파이 연결 안 됨".into(),
+            (Lang::Ko, WiFiStatus::Connected) => match &self.ssid {
                 Some(s) => s.clone(),
                 None => "이름 확인 불가 (권한 필요)".into(),
+            },
+            (Lang::En, WiFiStatus::Unavailable) => "No Wi-Fi hardware".into(),
+            (Lang::En, WiFiStatus::PoweredOff) => "Wi-Fi Off".into(),
+            (Lang::En, WiFiStatus::Disconnected) => "Not Connected".into(),
+            (Lang::En, WiFiStatus::Connected) => match &self.ssid {
+                Some(s) => s.clone(),
+                None => "Name unavailable (permission required)".into(),
             },
         }
     }
@@ -88,10 +100,17 @@ pub enum PolicySource {
 
 impl PolicySource {
     pub fn korean_description(&self) -> String {
-        match self {
-            PolicySource::Rule { rule } => format!("등록된 네트워크 '{}'", rule.name),
-            PolicySource::UnknownWiFi => "등록되지 않은 와이파이".into(),
-            PolicySource::NoWiFi => "와이파이 연결 없음".into(),
+        self.description_in(i18n::current())
+    }
+
+    pub fn description_in(&self, lang: Lang) -> String {
+        match (lang, self) {
+            (Lang::Ko, PolicySource::Rule { rule }) => format!("등록된 네트워크 '{}'", rule.name),
+            (Lang::Ko, PolicySource::UnknownWiFi) => "등록되지 않은 와이파이".into(),
+            (Lang::Ko, PolicySource::NoWiFi) => "와이파이 연결 없음".into(),
+            (Lang::En, PolicySource::Rule { rule }) => format!("Registered network '{}'", rule.name),
+            (Lang::En, PolicySource::UnknownWiFi) => "Unregistered Wi-Fi".into(),
+            (Lang::En, PolicySource::NoWiFi) => "No Wi-Fi connection".into(),
         }
     }
 
@@ -162,12 +181,19 @@ impl PolicyResolver {
 
     /// 현재 네트워크를 규칙으로 만든다. 연결되어 있지 않거나 식별할 정보가 없으면 None.
     pub fn make_rule(snapshot: &WiFiSnapshot, timeout_seconds: Option<i64>) -> Option<NetworkRule> {
+        Self::make_rule_in(i18n::current(), snapshot, timeout_seconds)
+    }
+
+    pub fn make_rule_in(lang: Lang, snapshot: &WiFiSnapshot, timeout_seconds: Option<i64>) -> Option<NetworkRule> {
         if !snapshot.is_connected() || (snapshot.ssid.is_none() && snapshot.router_mac.is_none()) {
             return None;
         }
         let name = match (&snapshot.ssid, &snapshot.router_mac) {
             (Some(s), _) => s.clone(),
-            (None, Some(m)) => format!("공유기 {m}"),
+            (None, Some(m)) => match lang {
+                Lang::Ko => format!("공유기 {m}"),
+                Lang::En => format!("Router {m}"),
+            },
             (None, None) => unreachable!(),
         };
         Some(NetworkRule::new(

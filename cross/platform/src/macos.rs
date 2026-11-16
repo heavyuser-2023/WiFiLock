@@ -38,6 +38,25 @@ extern "C" {
     fn IOPMCopyAssertionsByProcess(assertions_by_pid: *mut CFDictionaryRef) -> i32;
 }
 
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFLocaleCopyPreferredLanguages() -> CFArrayRef;
+}
+
+/// macOS 시스템 선호 언어 목록의 첫 언어가 한국어면 `Ko`, 아니면 `En`.
+pub fn system_lang() -> wifilock_core::Lang {
+    let raw = unsafe { CFLocaleCopyPreferredLanguages() };
+    if !raw.is_null() {
+        let langs: CFArray<CFString> = unsafe { CFArray::wrap_under_create_rule(raw) };
+        if let Some(first) = langs.iter().next() {
+            if let Some(lang) = wifilock_core::i18n::parse_locale_tag(&first.to_string()) {
+                return lang;
+            }
+        }
+    }
+    wifilock_core::i18n::detect_from_env().unwrap_or(wifilock_core::Lang::En)
+}
+
 // 클래스를 이름으로 찾을 수 있도록 프레임워크를 링크한다.
 #[link(name = "CoreWLAN", kind = "framework")]
 extern "C" {}

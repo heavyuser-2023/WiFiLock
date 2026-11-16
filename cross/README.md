@@ -8,17 +8,18 @@
 - 메뉴: 현재 네트워크·잠금 시간·남은 시간, 지금 잠그기, 자동 잠금 사용, 일시 중지(30분~4시간·다시 시작할 때까지), 현재 네트워크 등록, 설정, 정보, 종료
 - 잠기기 전 경고 창(기본 10초 전, 마우스나 키보드를 움직이면 취소), 동영상 재생 중 잠금 보류, 로그인할 때 자동 실행
 - 운영체제 자체 잠금(맥: 화면 보호기·디스플레이 끄기와 암호 요구, 윈도우: 보안 화면 보호기·화면 끄기·절전과 로그인 요구·비활성 한도 정책, 리눅스: 그놈·KDE 화면 잠금)이 이 앱보다 짧으면 설정 창에서 알림
+- 표시 언어: 운영체제 환경 설정이 한국어이면 한국어로, 한국어가 아니면 영어로 자동 표시
 
 ## 설치 파일
 
 | 운영체제 | 파일 | 비고 |
 | --- | --- | --- |
-| 맥 11 이상 (애플 실리콘·인텔) | `WiFiLock_2.2.1_universal.dmg` | 열어서 응용 프로그램 폴더로 끌어다 놓기 |
-| 윈도우 10·11 (x64) | `WiFiLock_2.2.1_x64-setup.exe` | 현재 사용자에게 설치 (관리자 권한 필요 없음), 한국어 설치 화면 |
-| 윈도우 10·11 (x64) | `WiFiLock_2.2.1_x64_en-US.msi` | 회사 배포 도구용 |
-| 우분투·데비안 (x64) | `WiFiLock_2.2.1_amd64.deb` | `sudo apt install ./WiFiLock_2.2.1_amd64.deb` |
-| 페도라 등 (x64) | `WiFiLock-2.2.1-1.x86_64.rpm` | `sudo dnf install ./WiFiLock-2.2.1-1.x86_64.rpm` |
-| 그 밖의 리눅스 (x64) | `WiFiLock_2.2.1_amd64.AppImage` | 실행 권한을 주고 바로 실행 |
+| 맥 11 이상 (애플 실리콘·인텔) | `WiFiLock_2.3.0_universal.dmg` | 열어서 응용 프로그램 폴더로 끌어다 놓기 |
+| 윈도우 10·11 (x64) | `WiFiLock_2.3.0_x64-setup.exe` | 현재 사용자에게 설치 (관리자 권한 필요 없음), 한국어·영어 설치 화면 |
+| 윈도우 10·11 (x64) | `WiFiLock_2.3.0_x64_en-US.msi` | 회사 배포 도구용 |
+| 우분투·데비안 (x64) | `WiFiLock_2.3.0_amd64.deb` | `sudo apt install ./WiFiLock_2.3.0_amd64.deb` |
+| 페도라 등 (x64) | `WiFiLock-2.3.0-1.x86_64.rpm` | `sudo dnf install ./WiFiLock-2.3.0-1.x86_64.rpm` |
+| 그 밖의 리눅스 (x64) | `WiFiLock_2.3.0_amd64.AppImage` | 실행 권한을 주고 바로 실행 |
 
 리눅스 꾸러미 이름은 `wi-fi-lock` 입니다. 메뉴 아이콘을 보이려면 `libayatana-appindicator3` 가 필요하며 deb·rpm 설치 때 함께 설치됩니다.
 
@@ -56,7 +57,8 @@ core/        운영체제와 무관한 핵심 로직 (세 운영체제가 그대
   scheduler.rs   자리비움 시간 → 경고·잠금 시점 (같은 자리비움 동안 한 번만 잠금)
   controller.rs  매 초 판단 흐름 (잠금 해제·잠자기에서 깨어남 감지, 일시 중지)
   store.rs       설정 파일 저장 (임시 파일에 쓴 뒤 바꿔치기)
-  format.rs      한글 시간 표기와 상태 문구
+  format.rs      시간 표기와 상태 문구 (한국어·영어)
+  i18n.rs        한국어·영어 언어 상태 및 로케일 판별
 platform/    운영체제별 시스템 기능 (Platform 하나로 감쌈)
   macos.rs     CoreGraphics·IOKit·CoreWLAN·login.framework
   windows.rs   GetLastInputInfo·WTS·WLAN API·IP 도우미·LockWorkStation
@@ -108,5 +110,6 @@ npx tauri build
 | `--open-settings` | 시작하자마자 설정 창 열기 |
 | `--no-location-prompt` | 시작할 때 위치 권한을 묻지 않음 |
 | `--preview-hud` | 경고 창 모양 확인 (판단을 멈추고 경고 창만 띄움) |
+| `--lang <ko\|en>` | 표시 언어 강제 지정 (없으면 시스템 환경 설정을 따름) |
 
 설정 파일 위치: 맥 `~/Library/Application Support/com.wifilock.app/settings.json`, 윈도우 `%APPDATA%\com.wifilock.app\settings.json`, 리눅스 `~/.config/com.wifilock.app/settings.json`

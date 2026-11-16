@@ -46,7 +46,7 @@ public final class SettingsStore: ObservableObject {
         guard var rule = PolicyResolver.makeRule(for: snapshot, timeoutSeconds: timeoutSeconds) else { return nil }
         // 이름이 같은 다른 공유기의 네트워크가 이미 있으면 구분할 수 있게 공유기 주소 끝자리를 붙인다.
         if settings.rules.contains(where: { $0.name == rule.name }), let mac = rule.routerMAC {
-            rule.name += " (공유기 …\(mac.suffix(5)))"
+            rule.name += AppLang.isKo ? " (공유기 …\(mac.suffix(5)))" : " (Router …\(mac.suffix(5)))"
         }
         settings.rules.append(rule)
         return rule

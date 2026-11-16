@@ -2,7 +2,7 @@
 
 use tauri::AppHandle;
 use uuid::Uuid;
-use wifilock_core::AppSettings;
+use wifilock_core::{i18n, AppSettings};
 
 use crate::engine;
 use crate::logging;
@@ -39,7 +39,8 @@ pub async fn open_system_lock_settings(app: AppHandle) {
 
 #[tauri::command]
 pub async fn save_settings(app: AppHandle, settings: serde_json::Value) -> Result<UiState, String> {
-    let parsed: AppSettings = serde_json::from_value(settings).map_err(|e| format!("설정 형식 오류: {e}"))?;
+    let parsed: AppSettings = serde_json::from_value(settings)
+        .map_err(|e| if i18n::is_ko() { format!("설정 형식 오류: {e}") } else { format!("Invalid settings format: {e}") })?;
     let st = state(&app);
     if lock(&st.store).replace(parsed) {
         logging::info("설정 저장");
@@ -66,8 +67,12 @@ pub async fn add_rule_by_name(app: AppHandle, ssid: String, timeout: i64) -> Res
             logging::info(format!("이름으로 네트워크 등록: {}", r.name));
             Ok(after_change(&app))
         }
-        None if ssid.trim().is_empty() => Err("와이파이 이름을 입력해 주세요.".into()),
-        None => Err("이미 같은 이름의 네트워크가 등록되어 있습니다.".into()),
+        None if ssid.trim().is_empty() => Err(i18n::pick("와이파이 이름을 입력해 주세요.", "Please enter a Wi-Fi name.").into()),
+        None => Err(i18n::pick(
+            "이미 같은 이름의 네트워크가 등록되어 있습니다.",
+            "A network with the same name is already registered.",
+        )
+        .into()),
     }
 }
 

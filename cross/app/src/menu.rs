@@ -18,7 +18,8 @@ pub struct MenuHandles {
     pub ids: Vec<String>,
 }
 
-pub const PAUSE_CHOICES: [(&str, u64); 4] = [("30분", 1800), ("1시간", 3600), ("2시간", 7200), ("4시간", 14400)];
+pub const PAUSE_CHOICES_KO: [(&str, u64); 4] = [("30분", 1800), ("1시간", 3600), ("2시간", 7200), ("4시간", 14400)];
+pub const PAUSE_CHOICES_EN: [(&str, u64); 4] = [("30 Minutes", 1800), ("1 Hour", 3600), ("2 Hours", 7200), ("4 Hours", 14400)];
 
 /// 맥에서는 단축키 표시를 붙인다 (메뉴가 열려 있을 때만 동작).
 fn accel(key: &str) -> Option<String> {
@@ -30,46 +31,59 @@ fn accel(key: &str) -> Option<String> {
 }
 
 pub fn build(app: &AppHandle, snap: &UiSnapshot) -> tauri::Result<(Menu<Wry>, MenuHandles)> {
+    let ko = wifilock_core::i18n::is_ko();
+    let p = |k, e| if ko { k } else { e };
     let s = &snap.structure;
     let network = MenuItem::with_id(app, "status-network", &snap.network, false, None::<&str>)?;
     let policy = MenuItem::with_id(app, "status-policy", &snap.policy, false, None::<&str>)?;
     let state_item = MenuItem::with_id(app, "status-state", &snap.state, false, None::<&str>)?;
-    let permission = MenuItem::with_id(app, "permission", "와이파이 이름을 읽으려면 위치 권한이 필요합니다…", true, None::<&str>)?;
-    let lock_now = MenuItem::with_id(app, "lock-now", "지금 잠그기", true, accel("L"))?;
-    let enabled = CheckMenuItem::with_id(app, "enabled", "자동 잠금 사용", true, s.enabled, None::<&str>)?;
+    let permission = MenuItem::with_id(
+        app,
+        "permission",
+        p("와이파이 이름을 읽으려면 위치 권한이 필요합니다…", "Location permission required to read Wi-Fi name…"),
+        true,
+        None::<&str>,
+    )?;
+    let lock_now = MenuItem::with_id(app, "lock-now", p("지금 잠그기", "Lock Now"), true, accel("L"))?;
+    let enabled = CheckMenuItem::with_id(app, "enabled", p("자동 잠금 사용", "Enable Auto-Lock"), true, s.enabled, None::<&str>)?;
 
+    let pause_choices = if ko { &PAUSE_CHOICES_KO } else { &PAUSE_CHOICES_EN };
     let mut pause_items: Vec<MenuItem<Wry>> = Vec::new();
-    for (label, secs) in PAUSE_CHOICES {
-        pause_items.push(MenuItem::with_id(app, format!("pause-{secs}"), label, true, None::<&str>)?);
+    for (label, secs) in pause_choices {
+        pause_items.push(MenuItem::with_id(app, format!("pause-{secs}"), *label, true, None::<&str>)?);
     }
-    let forever = MenuItem::with_id(app, "pause-forever", "다시 시작할 때까지", true, None::<&str>)?;
+    let forever = MenuItem::with_id(app, "pause-forever", p("다시 시작할 때까지", "Until Resumed"), true, None::<&str>)?;
     let sep_p = PredefinedMenuItem::separator(app)?;
     let mut pause_refs: Vec<&dyn IsMenuItem<Wry>> = pause_items.iter().map(|i| i as &dyn IsMenuItem<Wry>).collect();
     pause_refs.push(&sep_p);
     pause_refs.push(&forever);
-    let pause = Submenu::with_id_and_items(app, "pause", "일시 중지", true, &pause_refs)?;
-    let resume = MenuItem::with_id(app, "resume", "다시 시작", true, None::<&str>)?;
+    let pause = Submenu::with_id_and_items(app, "pause", p("일시 중지", "Pause"), true, &pause_refs)?;
+    let resume = MenuItem::with_id(app, "resume", p("다시 시작", "Resume"), true, None::<&str>)?;
     let add = s
         .add_label
         .as_ref()
         .map(|label| MenuItem::with_id(app, "add-network", label, true, None::<&str>))
         .transpose()?;
-    let settings = MenuItem::with_id(app, "settings", "설정…", true, accel(","))?;
+    let settings = MenuItem::with_id(app, "settings", p("설정…", "Settings…"), true, accel(","))?;
     let about = PredefinedMenuItem::about(
         app,
-        Some("와이파이 잠금 정보"),
+        Some(p("와이파이 잠금 정보", "About WiFiLock")),
         Some(AboutMetadata {
-            name: Some("와이파이 잠금".into()),
+            name: Some(p("와이파이 잠금", "WiFiLock").into()),
             version: Some(app.package_info().version.to_string()),
             comments: Some(
-                "와이파이 연결 상태에 따라 자동 잠금 시간을 바꿔 주는 앱입니다.\n등록한 네트워크에서는 길게, 낯선 곳에서는 짧게 잠급니다.".into(),
+                p(
+                    "와이파이 연결 상태에 따라 자동 잠금 시간을 바꿔 주는 앱입니다.\n등록한 네트워크에서는 길게, 낯선 곳에서는 짧게 잠급니다.",
+                    "Changes your automatic screen lock timeout based on Wi-Fi status.\nLonger on trusted networks, shorter on unknown networks.",
+                )
+                .into(),
             ),
             license: Some("MIT".into()),
             website: Some("https://github.com/heavyuser-2023/WiFiLock".into()),
             ..Default::default()
         }),
     )?;
-    let quit = MenuItem::with_id(app, "quit", "종료", true, accel("Q"))?;
+    let quit = MenuItem::with_id(app, "quit", p("종료", "Quit"), true, accel("Q"))?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
     let sep3 = PredefinedMenuItem::separator(app)?;

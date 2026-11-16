@@ -2,6 +2,10 @@ import AppKit
 import SwiftUI
 import WiFiLockCore
 
+private func l(_ ko: String, _ en: String) -> String {
+    AppLang.pick(ko, en)
+}
+
 struct SettingsView: View {
     @ObservedObject var store: SettingsStore
     @ObservedObject var wifi: WiFiMonitor
@@ -30,26 +34,26 @@ struct SettingsView: View {
     private var generalSection: some View {
         Section {
             Toggle(isOn: $store.settings.enabled) {
-                Text("자동 잠금 사용")
-                Text("키보드·마우스 입력이 없으면 아래 시간 뒤에 화면을 잠급니다.")
+                Text(l("자동 잠금 사용", "Enable Auto-Lock"))
+                Text(l("키보드·마우스 입력이 없으면 아래 시간 뒤에 화면을 잠급니다.", "Automatically locks the screen after the idle time below."))
             }
-            Toggle("로그인할 때 자동으로 실행", isOn: Binding(
+            Toggle(l("로그인할 때 자동으로 실행", "Launch at Login"), isOn: Binding(
                 get: { launchAtLogin.isEnabled || launchAtLogin.needsApproval },
                 set: { launchAtLogin.set($0) }
             ))
             if launchAtLogin.needsApproval {
                 HStack {
-                    Label("시스템 설정의 로그인 항목에서 허용이 필요합니다", systemImage: "exclamationmark.triangle")
+                    Label(l("시스템 설정의 로그인 항목에서 허용이 필요합니다", "Approval required in System Settings > Login Items"), systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.orange)
                     Spacer()
-                    Button("열기") { launchAtLogin.openLoginItemsSettings() }
+                    Button(l("열기", "Open")) { launchAtLogin.openLoginItemsSettings() }
                 }
             }
             if let err = launchAtLogin.lastError {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
         } header: {
-            Text("일반")
+            Text(l("일반", "General"))
         }
     }
 
@@ -65,29 +69,36 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(wifi.snapshot.koreanDescription).font(.headline)
                     if wifi.snapshot.isConnected, let mac = wifi.snapshot.routerMAC {
-                        Text("공유기 주소 \(mac)").font(.caption).foregroundStyle(.secondary)
+                        Text(AppLang.isKo ? "공유기 주소 \(mac)" : "Router MAC \(mac)")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("지금 적용: \(KoreanFormat.timeout(controller.status.policy.timeoutSeconds)) · \(controller.status.policy.source.koreanDescription)")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text(
+                        AppLang.isKo
+                            ? "지금 적용: \(KoreanFormat.timeout(controller.status.policy.timeoutSeconds)) · \(controller.status.policy.source.koreanDescription)"
+                            : "Current policy: \(KoreanFormat.timeout(controller.status.policy.timeoutSeconds)) · \(controller.status.policy.source.koreanDescription)"
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
                     Text(StatusBarController.stateText(controller.status.state))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 if canAddCurrent {
-                    Button("등록") { store.addRule(for: wifi.snapshot) }
+                    Button(l("등록", "Add")) { store.addRule(for: wifi.snapshot) }
                 }
             }
             .padding(.vertical, 2)
 
             if !wifi.hasLocationPermission {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("위치 권한이 없어 와이파이 이름을 읽을 수 없습니다", systemImage: "location.slash")
+                    Label(l("위치 권한이 없어 와이파이 이름을 읽을 수 없습니다", "Location permission required to read Wi-Fi name"), systemImage: "location.slash")
                         .foregroundStyle(.orange)
                     Text(permissionExplanation)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button(wifi.locationStatus == .notDetermined ? "위치 권한 요청" : "시스템 설정에서 허용하기") {
+                    Button(wifi.locationStatus == .notDetermined
+                        ? l("위치 권한 요청", "Request Location Permission")
+                        : l("시스템 설정에서 허용하기", "Allow in System Settings")) {
                         if wifi.locationStatus == .notDetermined {
                             NSApp.activate(ignoringOtherApps: true)
                             wifi.requestLocationPermission()
@@ -99,17 +110,25 @@ struct SettingsView: View {
                 .padding(.vertical, 2)
             }
         } header: {
-            Text("현재 네트워크")
+            Text(l("현재 네트워크", "Current Network"))
         }
     }
 
     private var permissionExplanation: String {
-        let head = "macOS 는 위치 권한을 받은 앱에만 와이파이 이름을 알려 줍니다. "
-        let tail = " 위치 정보는 와이파이 이름 확인에만 쓰며 저장하거나 밖으로 보내지 않습니다."
-        if wifi.snapshot.isConnected, wifi.snapshot.routerMAC != nil {
-            return head + "지금은 공유기 주소로 네트워크를 구분하고 있지만, 와이파이 이름으로 구분하려면 권한을 허용해 주세요." + tail
+        if AppLang.isKo {
+            let head = "macOS 는 위치 권한을 받은 앱에만 와이파이 이름을 알려 줍니다. "
+            let tail = " 위치 정보는 와이파이 이름 확인에만 쓰며 저장하거나 밖으로 보내지 않습니다."
+            if wifi.snapshot.isConnected, wifi.snapshot.routerMAC != nil {
+                return head + "지금은 공유기 주소로 네트워크를 구분하고 있지만, 와이파이 이름으로 구분하려면 권한을 허용해 주세요." + tail
+            }
+            return head + "권한이 없으면 '와이파이 연결됨'과 '연결 안 됨'만 구분해 기본 잠금 시간을 적용합니다. 집·사무실처럼 네트워크마다 시간을 다르게 하려면 권한을 허용해 주세요." + tail
         }
-        return head + "권한이 없으면 '와이파이 연결됨'과 '연결 안 됨'만 구분해 기본 잠금 시간을 적용합니다. 집·사무실처럼 네트워크마다 시간을 다르게 하려면 권한을 허용해 주세요." + tail
+        let head = "macOS only shares Wi-Fi network names with apps that have Location permission. "
+        let tail = " Location data is used solely to check the Wi-Fi name and is never stored or sent anywhere."
+        if wifi.snapshot.isConnected, wifi.snapshot.routerMAC != nil {
+            return head + "Currently distinguishing networks by router MAC address; grant permission to identify networks by Wi-Fi name." + tail
+        }
+        return head + "Without permission, only 'Wi-Fi connected' and 'Not connected' are distinguished using default timeouts. Grant permission to set per-network timeouts." + tail
     }
 
     private var wifiSymbol: String {
@@ -132,10 +151,13 @@ struct SettingsView: View {
     private var rulesSection: some View {
         Section {
             if store.settings.rules.isEmpty {
-                Text("등록된 네트워크가 없습니다. 집이나 사무실처럼 믿을 수 있는 네트워크를 등록하면 그곳에서는 잠금 시간을 길게 둘 수 있습니다.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(l(
+                    "등록된 네트워크가 없습니다. 집이나 사무실처럼 믿을 수 있는 네트워크를 등록하면 그곳에서는 잠금 시간을 길게 둘 수 있습니다.",
+                    "No registered networks. Add trusted networks like home or office to use longer lock times there."
+                ))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(store.settings.rules) { rule in
                 RuleRow(
@@ -148,7 +170,7 @@ struct SettingsView: View {
                 Button {
                     store.addRule(for: wifi.snapshot)
                 } label: {
-                    Label("현재 네트워크 추가", systemImage: "plus")
+                    Label(l("현재 네트워크 추가", "Add Current Network"), systemImage: "plus")
                 }
                 .disabled(!canAddCurrent)
                 Button {
@@ -156,18 +178,21 @@ struct SettingsView: View {
                     newTimeout = AppSettings.defaultTrustedTimeout
                     showingAddSheet = true
                 } label: {
-                    Label("이름으로 추가…", systemImage: "keyboard")
+                    Label(l("이름으로 추가…", "Add by Name…"), systemImage: "keyboard")
                 }
                 Spacer()
             }
         } header: {
-            Text("네트워크별 잠금 시간")
+            Text(l("네트워크별 잠금 시간", "Per-Network Lock Times"))
         } footer: {
-            Text("위에 있는 규칙부터 적용됩니다. 공유기 주소까지 기록된 규칙은 이름이 같아도 공유기가 다르면 적용하지 않습니다. 이름으로만 추가한 규칙은 같은 이름의 모든 와이파이에 적용됩니다.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(l(
+                "위에 있는 규칙부터 적용됩니다. 공유기 주소까지 기록된 규칙은 이름이 같아도 공유기가 다르면 적용하지 않습니다. 이름으로만 추가한 규칙은 같은 이름의 모든 와이파이에 적용됩니다.",
+                "Rules are applied from top to bottom. Rules with a router MAC address only apply to that specific router, even if another Wi-Fi has the same name. Rules added by name only apply to any Wi-Fi with that name."
+            ))
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -186,14 +211,17 @@ struct SettingsView: View {
 
     private var defaultsSection: some View {
         Section {
-            TimeoutPicker(title: "등록되지 않은 와이파이", systemImage: "wifi", selection: $store.settings.unknownWiFiTimeoutSeconds)
-            TimeoutPicker(title: "와이파이 꺼짐 · 연결 안 됨", systemImage: "wifi.slash", selection: $store.settings.noWiFiTimeoutSeconds)
+            TimeoutPicker(title: l("등록되지 않은 와이파이", "Unregistered Wi-Fi"), systemImage: "wifi", selection: $store.settings.unknownWiFiTimeoutSeconds)
+            TimeoutPicker(title: l("와이파이 꺼짐 · 연결 안 됨", "Wi-Fi Off · Not Connected"), systemImage: "wifi.slash", selection: $store.settings.noWiFiTimeoutSeconds)
         } header: {
-            Text("기본 잠금 시간")
+            Text(l("기본 잠금 시간", "Default Lock Times"))
         } footer: {
-            Text("등록되지 않은 곳에서는 짧게 두면 노트북을 두고 자리를 비웠을 때 더 안전합니다.")
-                .font(.caption).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(l(
+                "등록되지 않은 곳에서는 짧게 두면 노트북을 두고 자리를 비웠을 때 더 안전합니다.",
+                "Using a shorter timeout for unregistered networks helps keep your Mac secure away from home."
+            ))
+            .font(.caption).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -201,26 +229,32 @@ struct SettingsView: View {
 
     private var advancedSection: some View {
         Section {
-            Toggle("잠그기 전에 화면에 경고 표시", isOn: $store.settings.warnBeforeLock)
-            Picker("경고 표시 시간", selection: $store.settings.warningSeconds) {
+            Toggle(l("잠그기 전에 화면에 경고 표시", "Show warning before locking"), isOn: $store.settings.warnBeforeLock)
+            Picker(l("경고 표시 시간", "Warning duration"), selection: $store.settings.warningSeconds) {
                 ForEach(warningOptions, id: \.self) { s in
                     Text(KoreanFormat.duration(s)).tag(s)
                 }
             }
             .disabled(!store.settings.warnBeforeLock)
             if store.settings.warnBeforeLock {
-                Text("잠금 시간이 짧으면 경고는 잠금 시간의 절반까지만 표시됩니다. 경고 중에 마우스나 키보드를 움직이면 취소됩니다.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(l(
+                    "잠금 시간이 짧으면 경고는 잠금 시간의 절반까지만 표시됩니다. 경고 중에 마우스나 키보드를 움직이면 취소됩니다.",
+                    "For short lock times, the warning is capped at half the lock time. Moving the mouse or pressing a key cancels it."
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
             Toggle(isOn: $store.settings.respectDisplaySleepAssertions) {
-                Text("동영상 재생 중에는 잠그지 않기")
-                Text("앱이 화면을 켜 두도록 요청한 동안(동영상, 발표, 화상 회의 등)은 잠금을 미룹니다.")
+                Text(l("동영상 재생 중에는 잠그지 않기", "Do not lock during video playback"))
+                Text(l(
+                    "앱이 화면을 켜 두도록 요청한 동안(동영상, 발표, 화상 회의 등)은 잠금을 미룹니다.",
+                    "Delays locking while apps keep the screen awake (videos, presentations, meetings, etc.)."
+                ))
             }
-            Toggle("메뉴 막대에 남은 시간 표시", isOn: $store.settings.showCountdownInMenuBar)
+            Toggle(l("메뉴 막대에 남은 시간 표시", "Show countdown in menu bar"), isOn: $store.settings.showCountdownInMenuBar)
         } header: {
-            Text("고급")
+            Text(l("고급", "Advanced"))
         }
     }
 
@@ -234,18 +268,21 @@ struct SettingsView: View {
 
     private var addSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("와이파이 이름으로 추가").font(.headline)
-            Text("대소문자까지 정확히 입력해 주세요. 이름으로 구분하려면 위치 권한이 필요합니다.")
-                .font(.caption).foregroundStyle(.secondary)
-            TextField("와이파이 이름", text: $newSSID)
+            Text(l("와이파이 이름으로 추가", "Add by Wi-Fi Name")).font(.headline)
+            Text(l(
+                "대소문자까지 정확히 입력해 주세요. 이름으로 구분하려면 위치 권한이 필요합니다.",
+                "Enter the exact case-sensitive Wi-Fi name. Location permission is required to match by name."
+            ))
+            .font(.caption).foregroundStyle(.secondary)
+            TextField(l("와이파이 이름", "Wi-Fi name"), text: $newSSID)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(commitAdd)
-            TimeoutPicker(title: "잠금 시간", systemImage: "timer", selection: $newTimeout)
+            TimeoutPicker(title: l("잠금 시간", "Lock Time"), systemImage: "timer", selection: $newTimeout)
             HStack {
                 Spacer()
-                Button("취소", role: .cancel) { showingAddSheet = false }
+                Button(l("취소", "Cancel"), role: .cancel) { showingAddSheet = false }
                     .keyboardShortcut(.cancelAction)
-                Button("추가", action: commitAdd)
+                Button(l("추가", "Add"), action: commitAdd)
                     .keyboardShortcut(.defaultAction)
                     .disabled(newSSID.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -272,9 +309,9 @@ struct RuleRow: View {
             Image(systemName: isCurrent ? "checkmark.circle.fill" : "wifi")
                 .foregroundStyle(isCurrent ? Color.green : Color.secondary)
                 .frame(width: 18)
-                .help(isCurrent ? "지금 연결된 네트워크" : "")
+                .help(isCurrent ? l("지금 연결된 네트워크", "Currently connected network") : "")
             VStack(alignment: .leading, spacing: 2) {
-                TextField("이름", text: $rule.name)
+                TextField(l("이름", "Name"), text: $rule.name)
                     .textFieldStyle(.plain)
                     .font(.body.weight(.medium))
                 Text(identifierText)
@@ -293,14 +330,14 @@ struct RuleRow: View {
                 Image(systemName: "trash")
             }
             .buttonStyle(.borderless)
-            .help("이 네트워크 삭제")
+            .help(l("이 네트워크 삭제", "Delete this network"))
         }
     }
 
     private var identifierText: String {
         var parts: [String] = []
-        if let ssid = rule.ssid { parts.append("와이파이 이름: \(ssid)") }
-        if let mac = rule.routerMAC { parts.append("공유기: \(mac)") }
+        if let ssid = rule.ssid { parts.append(AppLang.isKo ? "와이파이 이름: \(ssid)" : "Wi-Fi Name: \(ssid)") }
+        if let mac = rule.routerMAC { parts.append(AppLang.isKo ? "공유기: \(mac)" : "Router: \(mac)") }
         return parts.joined(separator: " · ")
     }
 }
@@ -337,7 +374,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         if window == nil {
             let hosting = NSHostingController(rootView: makeView())
             let w = NSWindow(contentViewController: hosting)
-            w.title = "\(AppInfo.displayName) 설정"
+            w.title = AppLang.isKo ? "\(AppInfo.displayName) 설정" : "\(AppInfo.displayName) Settings"
             w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             w.setContentSize(NSSize(width: 560, height: 720))
             w.isReleasedWhenClosed = false

@@ -5,6 +5,7 @@
 
 pub mod controller;
 pub mod format;
+pub mod i18n;
 pub mod policy;
 pub mod scheduler;
 pub mod settings;
@@ -12,6 +13,7 @@ pub mod stabilizer;
 pub mod store;
 
 pub use controller::{Controller, LockStatus, PauseState, SystemInputs, TickResult};
+pub use i18n::Lang;
 pub use policy::{LockPolicy, PolicyResolver, PolicySource, WiFiSnapshot, WiFiStatus};
 pub use scheduler::{EngineState, LockScheduler, TickInput, TickOutput};
 pub use settings::{mac_normalize, AppSettings, NetworkRule, TimeoutPresets};

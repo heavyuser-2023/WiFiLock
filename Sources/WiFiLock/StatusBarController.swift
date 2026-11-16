@@ -63,14 +63,14 @@ final class StatusBarController: NSObject, NSMenuDelegate {
             item.isEnabled = false
             menu.addItem(item)
         }
-        permissionItem.title = "와이파이 이름을 읽으려면 위치 권한이 필요합니다…"
+        permissionItem.title = AppLang.pick("와이파이 이름을 읽으려면 위치 권한이 필요합니다…", "Location permission required to read Wi-Fi name…")
         permissionItem.image = NSImage(systemSymbolName: "location.slash", accessibilityDescription: nil)
         permissionItem.target = self
         permissionItem.action = #selector(requestPermission)
         menu.addItem(permissionItem)
         menu.addItem(.separator())
 
-        lockNowItem.title = "지금 잠그기"
+        lockNowItem.title = AppLang.pick("지금 잠그기", "Lock Now")
         lockNowItem.keyEquivalent = "l"
         lockNowItem.keyEquivalentModifierMask = [.command]
         lockNowItem.image = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: nil)
@@ -78,28 +78,31 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         lockNowItem.action = #selector(lockNow)
         menu.addItem(lockNowItem)
 
-        enabledItem.title = "자동 잠금 사용"
+        enabledItem.title = AppLang.pick("자동 잠금 사용", "Enable Auto-Lock")
         enabledItem.target = self
         enabledItem.action = #selector(toggleEnabled)
         menu.addItem(enabledItem)
 
-        pauseItem.title = "일시 중지"
+        pauseItem.title = AppLang.pick("일시 중지", "Pause")
         pauseItem.image = NSImage(systemSymbolName: "pause.circle", accessibilityDescription: nil)
         let pauseMenu = NSMenu()
-        for (title, secs) in [("30분", 1800.0), ("1시간", 3600.0), ("2시간", 7200.0), ("4시간", 14400.0)] {
+        let pauseChoices: [(String, TimeInterval)] = AppLang.isKo
+            ? [("30분", 1800.0), ("1시간", 3600.0), ("2시간", 7200.0), ("4시간", 14400.0)]
+            : [("30 Minutes", 1800.0), ("1 Hour", 3600.0), ("2 Hours", 7200.0), ("4 Hours", 14400.0)]
+        for (title, secs) in pauseChoices {
             let i = NSMenuItem(title: title, action: #selector(pauseFor(_:)), keyEquivalent: "")
             i.target = self
             i.representedObject = secs
             pauseMenu.addItem(i)
         }
         pauseMenu.addItem(.separator())
-        let indefinite = NSMenuItem(title: "다시 시작할 때까지", action: #selector(pauseFor(_:)), keyEquivalent: "")
+        let indefinite = NSMenuItem(title: AppLang.pick("다시 시작할 때까지", "Until Resumed"), action: #selector(pauseFor(_:)), keyEquivalent: "")
         indefinite.target = self
         pauseMenu.addItem(indefinite)
         pauseItem.submenu = pauseMenu
         menu.addItem(pauseItem)
 
-        resumeItem.title = "다시 시작"
+        resumeItem.title = AppLang.pick("다시 시작", "Resume")
         resumeItem.image = NSImage(systemSymbolName: "play.circle", accessibilityDescription: nil)
         resumeItem.target = self
         resumeItem.action = #selector(resume)
@@ -107,24 +110,24 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        addNetworkItem.title = "현재 네트워크를 등록"
+        addNetworkItem.title = AppLang.pick("현재 네트워크를 등록", "Add Current Network")
         addNetworkItem.image = NSImage(systemSymbolName: "plus.circle", accessibilityDescription: nil)
         addNetworkItem.target = self
         addNetworkItem.action = #selector(addCurrentNetwork)
         menu.addItem(addNetworkItem)
 
-        let settingsItem = NSMenuItem(title: "설정…", action: #selector(openSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: AppLang.pick("설정…", "Settings…"), action: #selector(openSettings), keyEquivalent: ",")
         settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         settingsItem.target = self
         menu.addItem(settingsItem)
 
         menu.addItem(.separator())
 
-        let aboutItem = NSMenuItem(title: "\(AppInfo.displayName) 정보", action: #selector(about), keyEquivalent: "")
+        let aboutItem = NSMenuItem(title: AppLang.pick("\(AppInfo.displayName) 정보", "About \(AppInfo.displayName)"), action: #selector(about), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
 
-        let quitItem = NSMenuItem(title: "종료", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: AppLang.pick("종료", "Quit"), action: #selector(quit), keyEquivalent: "q")
         quitItem.image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)
         quitItem.target = self
         menu.addItem(quitItem)
@@ -157,21 +160,29 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         case .disconnected: wifiSymbol = "wifi.exclamationmark"
         }
         networkItem.image = NSImage(systemSymbolName: wifiSymbol, accessibilityDescription: nil)
-        var net = "와이파이: \(snap.koreanDescription)"
-        if snap.isConnected, snap.ssid == nil, let mac = snap.routerMAC { net += " · 공유기 \(mac)" }
+        var net = AppLang.isKo ? "와이파이: \(snap.koreanDescription)" : "Wi-Fi: \(snap.koreanDescription)"
+        if snap.isConnected, snap.ssid == nil, let mac = snap.routerMAC {
+            net += AppLang.isKo ? " · 공유기 \(mac)" : " · Router \(mac)"
+        }
         networkItem.attributedTitle = Self.styled(net, bold: true)
 
         // 2) 적용 규칙
         let p = st.policy
         let source: String
         switch p.source {
-        case .rule(let r): source = "등록된 네트워크 '\(r.name)'"
-        case .unknownWiFi: source = "등록되지 않은 네트워크"
-        case .noWiFi: source = "와이파이 연결 없음"
+        case .rule(let r):
+            source = AppLang.isKo ? "등록된 네트워크 '\(r.name)'" : "Registered network '\(r.name)'"
+        case .unknownWiFi:
+            source = AppLang.pick("등록되지 않은 네트워크", "Unregistered network")
+        case .noWiFi:
+            source = AppLang.pick("와이파이 연결 없음", "No Wi-Fi connection")
         }
         policyItem.image = NSImage(systemSymbolName: "timer", accessibilityDescription: nil)
-        let pendingNote = st.policyChangePending ? " · 연결 변화 확인 중" : ""
-        policyItem.attributedTitle = Self.styled("잠금 시간: \(KoreanFormat.timeout(p.timeoutSeconds)) (\(source))\(pendingNote)")
+        let pendingNote = st.policyChangePending ? AppLang.pick(" · 연결 변화 확인 중", " · Checking connection change") : ""
+        let policyStr = AppLang.isKo
+            ? "잠금 시간: \(KoreanFormat.timeout(p.timeoutSeconds)) (\(source))\(pendingNote)"
+            : "Lock Time: \(KoreanFormat.timeout(p.timeoutSeconds)) (\(source))\(pendingNote)"
+        policyItem.attributedTitle = Self.styled(policyStr)
 
         // 3) 지금 상태
         stateItem.image = NSImage(systemSymbolName: Self.stateSymbol(st.state), accessibilityDescription: nil)
@@ -186,7 +197,8 @@ final class StatusBarController: NSObject, NSMenuDelegate {
                 addNetworkItem.isHidden = true
             } else {
                 addNetworkItem.isHidden = false
-                addNetworkItem.title = "현재 네트워크(\(snap.ssid ?? "공유기 \(snap.routerMAC!)"))를 등록"
+                let targetName = snap.ssid ?? AppLang.pick("공유기 \(snap.routerMAC!)", "Router \(snap.routerMAC!)")
+                addNetworkItem.title = AppLang.isKo ? "현재 네트워크(\(targetName))를 등록" : "Add Current Network (\(targetName))"
             }
         } else {
             addNetworkItem.isHidden = true
@@ -198,19 +210,31 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     }
 
     static func stateText(_ state: EngineState) -> String {
-        switch state {
-        case .disabled: return "자동 잠금이 꺼져 있음"
-        case .paused(let until):
+        switch (AppLang.current, state) {
+        case (.ko, .disabled): return "자동 잠금이 꺼져 있음"
+        case (.ko, .paused(let until)):
             if let until { return "일시 중지됨 (\(KoreanFormat.clock(until))까지)" }
             return "일시 중지됨 (다시 시작할 때까지)"
-        case .neverLock: return "이 네트워크에서는 자동으로 잠그지 않음"
-        case .heldByAssertion(let holders):
+        case (.ko, .neverLock): return "이 네트워크에서는 자동으로 잠그지 않음"
+        case (.ko, .heldByAssertion(let holders)):
             return "잠금 보류: \(holders.prefix(2).joined(separator: ", ")) 이(가) 화면 유지 중"
-        case .screenLocked: return "화면 잠김"
-        case .counting(let remaining, _): return "잠금까지 \(KoreanFormat.countdown(remaining)) 남음"
-        case .warning(let remaining): return "곧 잠김: \(Int(remaining.rounded(.up)))초"
-        case .lockTriggered: return "화면을 잠갔습니다"
-        case .waitingForActivity: return "잠금 완료 · 다시 사용하면 시간을 새로 셉니다"
+        case (.ko, .screenLocked): return "화면 잠김"
+        case (.ko, .counting(let remaining, _)): return "잠금까지 \(KoreanFormat.countdown(remaining)) 남음"
+        case (.ko, .warning(let remaining)): return "곧 잠김: \(Int(remaining.rounded(.up)))초"
+        case (.ko, .lockTriggered): return "화면을 잠갔습니다"
+        case (.ko, .waitingForActivity): return "잠금 완료 · 다시 사용하면 시간을 새로 셉니다"
+        case (.en, .disabled): return "Auto-lock is off"
+        case (.en, .paused(let until)):
+            if let until { return "Paused (until \(KoreanFormat.clock(until)))" }
+            return "Paused (until resumed)"
+        case (.en, .neverLock): return "Never auto-lock on this network"
+        case (.en, .heldByAssertion(let holders)):
+            return "Lock on hold: \(holders.prefix(2).joined(separator: ", ")) keeping screen awake"
+        case (.en, .screenLocked): return "Screen locked"
+        case (.en, .counting(let remaining, _)): return "Locks in \(KoreanFormat.countdown(remaining))"
+        case (.en, .warning(let remaining)): return "Locking soon: \(Int(remaining.rounded(.up)))s"
+        case (.en, .lockTriggered): return "Screen locked"
+        case (.en, .waitingForActivity): return "Locked · Timer resets on next activity"
         }
     }
 

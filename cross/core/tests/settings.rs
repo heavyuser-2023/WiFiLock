@@ -1,4 +1,4 @@
-use wifilock_core::{AppSettings, SettingsStore, TimeoutPresets, WiFiSnapshot, WiFiStatus};
+use wifilock_core::{AppSettings, Lang, NetworkRule, SettingsStore, TimeoutPresets, WiFiSnapshot, WiFiStatus};
 
 fn temp_store() -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = tempfile::tempdir().unwrap();
@@ -196,4 +196,12 @@ fn timeouts_longer_than_system_lock() {
     );
     assert_eq!(s.timeouts_longer_than(120).len(), 5);
     assert!(s.timeouts_longer_than(7200).iter().all(|(_, t)| *t == 0));
+
+    let en_list = s.timeouts_longer_than_in(Lang::En, 120);
+    assert_eq!(en_list[3], ("Unregistered Wi-Fi".to_string(), 300));
+    assert_eq!(en_list[4], ("No Wi-Fi".to_string(), 180));
+
+    let rule = NetworkRule::new("Home", Some("Home_5G"), Some("d8:07:b6:47:6b:8c"), 1800);
+    assert_eq!(rule.identifier_text_in(Lang::Ko), "와이파이 이름: Home_5G · 공유기: d8:07:b6:47:6b:8c");
+    assert_eq!(rule.identifier_text_in(Lang::En), "Wi-Fi Name: Home_5G · Router: d8:07:b6:47:6b:8c");
 }

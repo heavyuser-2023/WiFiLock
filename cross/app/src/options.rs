@@ -24,6 +24,8 @@ pub struct Options {
     pub allow_second_instance: bool,
     /// 자리를 비운 것처럼 자리비움 시간을 시작 시각부터 계속 늘린다 (개발용: 자원 사용량 측정)
     pub simulate_away: bool,
+    /// 표시 언어 강제 지정 (`ko` / `en`). 없으면 시스템 환경 설정을 따른다.
+    pub lang: Option<wifilock_core::Lang>,
 }
 
 impl Options {
@@ -42,6 +44,7 @@ impl Options {
                 "--preview-hud" => o.preview_hud = true,
                 "--allow-second-instance" => o.allow_second_instance = true,
                 "--simulate-away" => o.simulate_away = true,
+                "--lang" => o.lang = it.next().and_then(|v| wifilock_core::i18n::parse_locale_tag(&v)),
                 _ => {}
             }
         }
@@ -65,12 +68,15 @@ mod tests {
     #[test]
     fn parse_args() {
         let o = Options::parse(
-            ["app", "--self-test", "/tmp/x", "--override-timeout", "30", "--unknown"].iter().map(|s| s.to_string()),
+            ["app", "--self-test", "/tmp/x", "--override-timeout", "30", "--lang", "en", "--unknown"]
+                .iter()
+                .map(|s| s.to_string()),
         );
         assert_eq!(o.self_test_dir, Some(PathBuf::from("/tmp/x")));
         assert_eq!(o.override_timeout, Some(30));
+        assert_eq!(o.lang, Some(wifilock_core::Lang::En));
         assert!(o.dry_run && o.no_location_prompt, "자가 진단은 잠그지 않는다");
         let p = Options::parse(["app"].iter().map(|s| s.to_string()));
-        assert!(!p.dry_run && !p.is_self_test());
+        assert!(!p.dry_run && !p.is_self_test() && p.lang.is_none());
     }
 }

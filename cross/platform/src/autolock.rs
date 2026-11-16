@@ -5,7 +5,7 @@
 //! 여기에는 운영체제와 무관한 계산과 문구만 두고(모든 운영체제에서 시험), 값 읽기는 운영체제별 파일에서 한다.
 
 use serde::Serialize;
-use wifilock_core::{format, AppSettings};
+use wifilock_core::{format, i18n, AppSettings, Lang};
 
 /// 운영체제가 스스로 잠그는 조건 하나 (지금 전원 기준)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -42,12 +42,23 @@ pub fn sorted(mut list: Vec<SystemAutoLock>) -> Vec<SystemAutoLock> {
     list
 }
 
-/// "바로" 또는 "1분 뒤"
-fn delay_text(delay: i64) -> String {
-    if delay <= 0 {
-        "바로".into()
-    } else {
-        format!("{} 뒤", format::duration(delay))
+/// "바로"/"immediately" 또는 "1분 뒤"/"after 1 min"
+fn delay_text_in(lang: Lang, delay: i64) -> String {
+    match lang {
+        Lang::Ko => {
+            if delay <= 0 {
+                "바로".into()
+            } else {
+                format!("{} 뒤", format::duration_in(lang, delay))
+            }
+        }
+        Lang::En => {
+            if delay <= 0 {
+                "immediately".into()
+            } else {
+                format!("after {}", format::duration_in(lang, delay))
+            }
+        }
     }
 }
 
@@ -72,18 +83,26 @@ fn has_batchim(s: &str) -> bool {
 }
 
 /// 운영체제 잠금(`locks`, 짧은 것부터)이 이 앱에서 정한 잠금 시간보다 짧으면 안내를 만든다. 해당 없으면 None.
-/// `os_name`: "맥", "윈도우", "데스크톱"
+/// `os_name`: "맥"/"macOS", "윈도우"/"Windows", "데스크톱"/"Desktop"
 pub fn note(os_name: &str, locks: &[SystemAutoLock], settings: &AppSettings) -> Option<SystemLockNote> {
+    note_in(i18n::current(), os_name, locks, settings)
+}
+
+pub fn note_in(lang: Lang, os_name: &str, locks: &[SystemAutoLock], settings: &AppSettings) -> Option<SystemLockNote> {
     if !settings.enabled {
         return None;
     }
     let first = locks.first()?;
-    let affected = settings.timeouts_longer_than(first.after_seconds);
+    let affected = settings.timeouts_longer_than_in(lang, first.after_seconds);
     if affected.is_empty() {
         return None;
     }
-    let limit = format::duration(first.after_seconds);
-    let list = affected.iter().map(|(n, t)| format!("{n} {}", format::timeout(*t))).collect::<Vec<_>>().join(", ");
+    let limit = format::duration_in(lang, first.after_seconds);
+    let list = affected
+        .iter()
+        .map(|(n, t)| format!("{n} {}", format::timeout_in(lang, *t)))
+        .collect::<Vec<_>>()
+        .join(", ");
     // 고쳐야 할 설정: 이 앱에서 정한 가장 긴 시간보다 먼저 잠그는 것 모두
     let never = affected.iter().any(|(_, t)| *t <= 0);
     let longest = affected.iter().map(|(_, t)| *t).max().unwrap_or(0);
@@ -91,24 +110,46 @@ pub fn note(os_name: &str, locks: &[SystemAutoLock], settings: &AppSettings) -> 
     let mut names: Vec<&str> = blocking.iter().filter_map(|l| l.setting.as_deref()).collect();
     names.dedup();
     let mut fix = String::new();
-    if !names.is_empty() {
-        let joined = names.join(", ");
-        let need = if never { "'안 함'으로".to_string() } else { format!("{} 이상으로", format::duration(longest)) };
-        let object = if has_batchim(&joined) { "을" } else { "를" };
-        fix.push_str(&format!(" 이 앱에서 정한 시간대로 잠그려면 {joined}{object} {need} 바꿔 주세요."));
+    match lang {
+        Lang::Ko => {
+            if !names.is_empty() {
+                let joined = names.join(", ");
+                let need = if never { "'안 함'으로".to_string() } else { format!("{} 이상으로", format::duration_in(lang, longest)) };
+                let object = if has_batchim(&joined) { "을" } else { "를" };
+                fix.push_str(&format!(" 이 앱에서 정한 시간대로 잠그려면 {joined}{object} {need} 바꿔 주세요."));
+            }
+            if blocking.iter().any(|l| l.setting.is_none()) {
+                fix.push_str(" 관리자가 정한 정책은 여기서 바꿀 수 없습니다.");
+            }
+            let (if_p, subject) = if has_batchim(&limit) { ("이면", "이") } else { ("면", "가") };
+            Some(SystemLockNote {
+                title: format!("{os_name} 설정 때문에 {limit}{if_p} 잠깁니다"),
+                explanation: format!(
+                    "{}. 그래서 이 앱에서 더 길게 정한 잠금 시간도 실제로는 {limit}{subject} 됩니다: {list}.{fix}",
+                    first.cause
+                ),
+                button: blocking.iter().find_map(|l| l.button.clone()),
+            })
+        }
+        Lang::En => {
+            if !names.is_empty() {
+                let joined = names.join(", ");
+                let need = if never { "'Never'".to_string() } else { format!("at least {}", format::duration_in(lang, longest)) };
+                fix.push_str(&format!(" To use this app's lock times, change {joined} to {need}."));
+            }
+            if blocking.iter().any(|l| l.setting.is_none()) {
+                fix.push_str(" Policies set by an administrator cannot be changed here.");
+            }
+            Some(SystemLockNote {
+                title: format!("{os_name} settings will lock the screen after {limit}"),
+                explanation: format!(
+                    "{}. Longer lock times set in this app will effectively be limited to {limit}: {list}.{fix}",
+                    first.cause
+                ),
+                button: blocking.iter().find_map(|l| l.button.clone()),
+            })
+        }
     }
-    if blocking.iter().any(|l| l.setting.is_none()) {
-        fix.push_str(" 관리자가 정한 정책은 여기서 바꿀 수 없습니다.");
-    }
-    let (if_p, subject) = if has_batchim(&limit) { ("이면", "이") } else { ("면", "가") };
-    Some(SystemLockNote {
-        title: format!("{os_name} 설정 때문에 {limit}{if_p} 잠깁니다"),
-        explanation: format!(
-            "{}. 그래서 이 앱에서 더 길게 정한 잠금 시간도 실제로는 {limit}{subject} 됩니다: {list}.{fix}",
-            first.cause
-        ),
-        button: blocking.iter().find_map(|l| l.button.clone()),
-    })
 }
 
 // ---------- 맥 ----------
@@ -137,43 +178,89 @@ pub fn mac(
     password_delay: Option<i64>,
     screensaver_in_wallpaper: bool,
 ) -> Vec<SystemAutoLock> {
+    mac_in(i18n::current(), screensaver_idle, display_sleep_minutes, power, password_delay, screensaver_in_wallpaper)
+}
+
+pub fn mac_in(
+    lang: Lang,
+    screensaver_idle: Option<i64>,
+    display_sleep_minutes: Option<i64>,
+    power: MacPower,
+    password_delay: Option<i64>,
+    screensaver_in_wallpaper: bool,
+) -> Vec<SystemAutoLock> {
     let Some(delay) = password_delay else { return Vec::new() };
     let mut out = Vec::new();
-    let button = Some("잠금 화면 설정 열기".to_string());
+    let lock_btn = lang.pick("잠금 화면 설정 열기", "Open Lock Screen Settings").to_string();
     if let Some(s) = screensaver_idle.filter(|s| *s > 0) {
-        let (setting, ss_button, target) = if screensaver_in_wallpaper {
-            ("시스템 설정 > 배경화면의 '화면 보호기 시작'", "배경화면 설정 열기", SettingsTarget::MacWallpaper)
-        } else {
-            ("시스템 설정 > 잠금 화면의 '비활성 상태인 경우 화면 보호기 시작'", "잠금 화면 설정 열기", SettingsTarget::MacLockScreen)
+        let (setting, ss_button, target) = match (lang, screensaver_in_wallpaper) {
+            (Lang::Ko, true) => ("시스템 설정 > 배경화면의 '화면 보호기 시작'", "배경화면 설정 열기", SettingsTarget::MacWallpaper),
+            (Lang::Ko, false) => (
+                "시스템 설정 > 잠금 화면의 '비활성 상태인 경우 화면 보호기 시작'",
+                "잠금 화면 설정 열기",
+                SettingsTarget::MacLockScreen,
+            ),
+            (Lang::En, true) => ("System Settings > Wallpaper > 'Start Screen Saver'", "Open Wallpaper Settings", SettingsTarget::MacWallpaper),
+            (Lang::En, false) => (
+                "System Settings > Lock Screen > 'Start Screen Saver when inactive'",
+                "Open Lock Screen Settings",
+                SettingsTarget::MacLockScreen,
+            ),
+        };
+        let cause = match lang {
+            Lang::Ko => format!(
+                "입력이 없으면 {} 뒤 화면 보호기가 시작되고 {} 암호를 요구합니다",
+                format::duration_in(lang, s),
+                delay_text_in(lang, delay)
+            ),
+            Lang::En => format!(
+                "After {} of inactivity, the screen saver starts and requires a password {}",
+                format::duration_in(lang, s),
+                delay_text_in(lang, delay)
+            ),
         };
         out.push(SystemAutoLock {
             after_seconds: s + delay.max(0),
-            cause: format!(
-                "입력이 없으면 {} 뒤 화면 보호기가 시작되고 {} 암호를 요구합니다",
-                format::duration(s),
-                delay_text(delay)
-            ),
+            cause,
             setting: Some(setting.into()),
             button: Some(ss_button.into()),
             target: Some(target),
         });
     }
     if let Some(m) = display_sleep_minutes.filter(|m| *m > 0) {
-        let (row, now) = match power {
-            MacPower::Battery => ("배터리 사용 시 비활성 상태인 경우 디스플레이 끄기", " (배터리 사용 중)"),
-            MacPower::Adapter => ("전원 어댑터 사용 시 비활성 상태인 경우 디스플레이 끄기", " (전원 어댑터 사용 중)"),
-            MacPower::AdapterOnly => ("비활성 상태인 경우 디스플레이 끄기", ""),
-            MacPower::Ups => ("UPS 사용 시 비활성 상태인 경우 디스플레이 끄기", " (UPS 사용 중)"),
+        let (row, now) = match (lang, power) {
+            (Lang::Ko, MacPower::Battery) => ("배터리 사용 시 비활성 상태인 경우 디스플레이 끄기", " (배터리 사용 중)"),
+            (Lang::Ko, MacPower::Adapter) => ("전원 어댑터 사용 시 비활성 상태인 경우 디스플레이 끄기", " (전원 어댑터 사용 중)"),
+            (Lang::Ko, MacPower::AdapterOnly) => ("비활성 상태인 경우 디스플레이 끄기", ""),
+            (Lang::Ko, MacPower::Ups) => ("UPS 사용 시 비활성 상태인 경우 디스플레이 끄기", " (UPS 사용 중)"),
+            (Lang::En, MacPower::Battery) => ("Turn display off on battery when inactive", " (on battery)"),
+            (Lang::En, MacPower::Adapter) => ("Turn display off on power adapter when inactive", " (on power adapter)"),
+            (Lang::En, MacPower::AdapterOnly) => ("Turn display off when inactive", ""),
+            (Lang::En, MacPower::Ups) => ("Turn display off on UPS when inactive", " (on UPS)"),
+        };
+        let (cause, setting) = match lang {
+            Lang::Ko => (
+                format!(
+                    "입력이 없으면 {} 뒤 디스플레이가 꺼지고 {} 암호를 요구합니다{now}",
+                    format::duration_in(lang, m * 60),
+                    delay_text_in(lang, delay)
+                ),
+                format!("시스템 설정 > 잠금 화면의 '{row}'"),
+            ),
+            Lang::En => (
+                format!(
+                    "After {} of inactivity, the display turns off and requires a password {}{now}",
+                    format::duration_in(lang, m * 60),
+                    delay_text_in(lang, delay)
+                ),
+                format!("System Settings > Lock Screen > '{row}'"),
+            ),
         };
         out.push(SystemAutoLock {
             after_seconds: m * 60 + delay.max(0),
-            cause: format!(
-                "입력이 없으면 {} 뒤 디스플레이가 꺼지고 {} 암호를 요구합니다{now}",
-                format::duration(m * 60),
-                delay_text(delay)
-            ),
-            setting: Some(format!("시스템 설정 > 잠금 화면의 '{row}'")),
-            button,
+            cause,
+            setting: Some(setting),
+            button: Some(lock_btn),
             target: Some(SettingsTarget::MacLockScreen),
         });
     }
@@ -202,22 +289,50 @@ pub struct WindowsInputs {
 }
 
 pub fn windows(i: &WindowsInputs) -> Vec<SystemAutoLock> {
+    windows_in(i18n::current(), i)
+}
+
+pub fn windows_in(lang: Lang, i: &WindowsInputs) -> Vec<SystemAutoLock> {
     let mut out = Vec::new();
-    let power_now = if i.on_battery { " (배터리 사용 중)" } else { " (전원 연결 중)" };
-    let power_setting = "설정 > 시스템 > 전원 및 배터리의 '화면, 절전 및 최대 절전 시간 제한'";
+    let power_now = match (lang, i.on_battery) {
+        (Lang::Ko, true) => " (배터리 사용 중)",
+        (Lang::Ko, false) => " (전원 연결 중)",
+        (Lang::En, true) => " (on battery)",
+        (Lang::En, false) => " (plugged in)",
+    };
+    let power_setting = match lang {
+        Lang::Ko => "설정 > 시스템 > 전원 및 배터리의 '화면, 절전 및 최대 절전 시간 제한'",
+        Lang::En => "Settings > System > Power & battery > 'Screen, sleep, and hibernate timeouts'",
+    };
     if let Some((t, true)) = i.screensaver.filter(|(t, _)| *t > 0) {
+        let (cause, setting, button) = match lang {
+            Lang::Ko => (
+                format!("입력이 없으면 {} 뒤 화면 보호기가 시작되고, 다시 쓰려면 로그인해야 합니다", format::duration_in(lang, t)),
+                "설정 > 개인 설정 > 잠금 화면 > 화면 보호기의 '대기' 시간",
+                "화면 보호기 설정 열기",
+            ),
+            Lang::En => (
+                format!("After {} of inactivity, the screen saver starts and requires sign-in on resume", format::duration_in(lang, t)),
+                "Settings > Personalization > Lock screen > Screen saver > 'Wait' time",
+                "Open Screen Saver Settings",
+            ),
+        };
         out.push(SystemAutoLock {
             after_seconds: t,
-            cause: format!("입력이 없으면 {} 뒤 화면 보호기가 시작되고, 다시 쓰려면 로그인해야 합니다", format::duration(t)),
-            setting: Some("설정 > 개인 설정 > 잠금 화면 > 화면 보호기의 '대기' 시간".into()),
-            button: Some("화면 보호기 설정 열기".into()),
+            cause,
+            setting: Some(setting.into()),
+            button: Some(button.into()),
             target: Some(SettingsTarget::WindowsScreenSaver),
         });
     }
     if let Some(t) = i.inactivity_limit.filter(|t| *t > 0) {
+        let cause = match lang {
+            Lang::Ko => format!("회사 보안 정책(컴퓨터 비활성 한도)에 따라 {} 동안 입력이 없으면 잠깁니다", format::duration_in(lang, t)),
+            Lang::En => format!("Organization security policy (machine inactivity limit) locks the screen after {} of inactivity", format::duration_in(lang, t)),
+        };
         out.push(SystemAutoLock {
             after_seconds: t,
-            cause: format!("회사 보안 정책(컴퓨터 비활성 한도)에 따라 {} 동안 입력이 없으면 잠깁니다", format::duration(t)),
+            cause,
             setting: None,
             button: None,
             target: None,
@@ -225,22 +340,58 @@ pub fn windows(i: &WindowsInputs) -> Vec<SystemAutoLock> {
     }
     if let Some(d) = i.wake_lock_delay {
         let d = d.max(0);
-        let signin = if d == 0 { "다시 켤 때 로그인해야 합니다".to_string() } else { format!("{} 뒤부터는 다시 켤 때 로그인해야 합니다", format::duration(d)) };
+        let signin = match lang {
+            Lang::Ko => {
+                if d == 0 {
+                    "다시 켤 때 로그인해야 합니다".to_string()
+                } else {
+                    format!("{} 뒤부터는 다시 켤 때 로그인해야 합니다", format::duration_in(lang, d))
+                }
+            }
+            Lang::En => {
+                if d == 0 {
+                    "requires sign-in on wake".to_string()
+                } else {
+                    format!("requires sign-in on wake after {}", format::duration_in(lang, d))
+                }
+            }
+        };
+        let power_btn = lang.pick("전원 설정 열기", "Open Power Settings");
         if let Some(t) = i.display_off.filter(|t| *t > 0 && i.modern_standby) {
+            let (cause, setting) = match lang {
+                Lang::Ko => (
+                    format!("입력이 없으면 {} 뒤 화면이 꺼지며 대기 상태가 되고, {signin}{power_now}", format::duration_in(lang, t)),
+                    format!("{power_setting} 중 화면 끄기"),
+                ),
+                Lang::En => (
+                    format!("After {} of inactivity, the screen turns off and enters standby, and {signin}{power_now}", format::duration_in(lang, t)),
+                    format!("{power_setting} (Screen)"),
+                ),
+            };
             out.push(SystemAutoLock {
                 after_seconds: t + d,
-                cause: format!("입력이 없으면 {} 뒤 화면이 꺼지며 대기 상태가 되고, {signin}{power_now}", format::duration(t)),
-                setting: Some(format!("{power_setting} 중 화면 끄기")),
-                button: Some("전원 설정 열기".into()),
+                cause,
+                setting: Some(setting),
+                button: Some(power_btn.into()),
                 target: Some(SettingsTarget::WindowsPower),
             });
         }
         if let Some(t) = i.sleep_after.filter(|t| *t > 0) {
+            let (cause, setting) = match lang {
+                Lang::Ko => (
+                    format!("입력이 없으면 {} 뒤 절전 모드로 들어가고, {signin}{power_now}", format::duration_in(lang, t)),
+                    format!("{power_setting} 중 절전"),
+                ),
+                Lang::En => (
+                    format!("After {} of inactivity, the PC enters sleep, and {signin}{power_now}", format::duration_in(lang, t)),
+                    format!("{power_setting} (Sleep)"),
+                ),
+            };
             out.push(SystemAutoLock {
                 after_seconds: t + d,
-                cause: format!("입력이 없으면 {} 뒤 절전 모드로 들어가고, {signin}{power_now}", format::duration(t)),
-                setting: Some(format!("{power_setting} 중 절전")),
-                button: Some("전원 설정 열기".into()),
+                cause,
+                setting: Some(setting),
+                button: Some(power_btn.into()),
                 target: Some(SettingsTarget::WindowsPower),
             });
         }
@@ -252,17 +403,35 @@ pub fn windows(i: &WindowsInputs) -> Vec<SystemAutoLock> {
 
 /// 그놈: idle-delay(빈 화면까지 초), lock-enabled, lock-delay(빈 화면 뒤 잠금까지 초)
 pub fn gnome(idle_delay: i64, lock_enabled: bool, lock_delay: i64) -> Vec<SystemAutoLock> {
+    gnome_in(i18n::current(), idle_delay, lock_enabled, lock_delay)
+}
+
+pub fn gnome_in(lang: Lang, idle_delay: i64, lock_enabled: bool, lock_delay: i64) -> Vec<SystemAutoLock> {
     if !lock_enabled || idle_delay <= 0 {
         return Vec::new();
     }
+    let (cause, setting) = match lang {
+        Lang::Ko => (
+            format!(
+                "입력이 없으면 {} 뒤 화면이 꺼지고 {} 잠깁니다",
+                format::duration_in(lang, idle_delay),
+                delay_text_in(lang, lock_delay)
+            ),
+            "설정 > 개인 정보 및 보안 > 화면 잠금의 '빈 화면 지연'(예전 그놈은 설정 > 전원의 '빈 화면')",
+        ),
+        Lang::En => (
+            format!(
+                "After {} of inactivity, the screen goes blank and locks {}",
+                format::duration_in(lang, idle_delay),
+                delay_text_in(lang, lock_delay)
+            ),
+            "Settings > Privacy & Security > Screen Lock > 'Blank Screen Delay' (or Settings > Power > 'Blank Screen')",
+        ),
+    };
     vec![SystemAutoLock {
         after_seconds: idle_delay + lock_delay.max(0),
-        cause: format!(
-            "입력이 없으면 {} 뒤 화면이 꺼지고 {} 잠깁니다",
-            format::duration(idle_delay),
-            delay_text(lock_delay)
-        ),
-        setting: Some("설정 > 개인 정보 및 보안 > 화면 잠금의 '빈 화면 지연'(예전 그놈은 설정 > 전원의 '빈 화면')".into()),
+        cause,
+        setting: Some(setting.into()),
         button: None,
         target: None,
     }]
@@ -270,14 +439,30 @@ pub fn gnome(idle_delay: i64, lock_enabled: bool, lock_delay: i64) -> Vec<System
 
 /// KDE: 화면 자동 잠금 사용, 잠금까지 분, 잠긴 뒤 암호 없이 풀 수 있는 유예 초
 pub fn kde(autolock: bool, timeout_minutes: i64, grace_seconds: i64) -> Vec<SystemAutoLock> {
+    kde_in(i18n::current(), autolock, timeout_minutes, grace_seconds)
+}
+
+pub fn kde_in(lang: Lang, autolock: bool, timeout_minutes: i64, grace_seconds: i64) -> Vec<SystemAutoLock> {
     if !autolock || timeout_minutes <= 0 {
         return Vec::new();
     }
+    let (cause, setting, button) = match lang {
+        Lang::Ko => (
+            format!("입력이 없으면 {} 뒤 화면을 잠급니다", format::duration_in(lang, timeout_minutes * 60)),
+            "시스템 설정 > 화면 잠금의 '화면 자동 잠금'",
+            "화면 잠금 설정 열기",
+        ),
+        Lang::En => (
+            format!("After {} of inactivity, the screen locks automatically", format::duration_in(lang, timeout_minutes * 60)),
+            "System Settings > Screen Locking > 'Lock screen automatically'",
+            "Open Screen Locking Settings",
+        ),
+    };
     vec![SystemAutoLock {
         after_seconds: timeout_minutes * 60 + grace_seconds.max(0),
-        cause: format!("입력이 없으면 {} 뒤 화면을 잠급니다", format::duration(timeout_minutes * 60)),
-        setting: Some("시스템 설정 > 화면 잠금의 '화면 자동 잠금'".into()),
-        button: Some("화면 잠금 설정 열기".into()),
+        cause,
+        setting: Some(setting.into()),
+        button: Some(button.into()),
         target: Some(SettingsTarget::KdeScreenLocker),
     }]
 }
@@ -288,7 +473,7 @@ mod tests {
 
     #[test]
     fn mac_screensaver_and_display() {
-        let v = mac(Some(300), Some(60), MacPower::Adapter, Some(0), false);
+        let v = mac_in(Lang::Ko, Some(300), Some(60), MacPower::Adapter, Some(0), false);
         assert_eq!(v.len(), 2);
         assert_eq!(v[0].after_seconds, 300);
         assert_eq!(v[0].cause, "입력이 없으면 5분 뒤 화면 보호기가 시작되고 바로 암호를 요구합니다");
@@ -296,7 +481,7 @@ mod tests {
         assert!(v[1].setting.as_deref().unwrap().contains("전원 어댑터 사용 시"));
         assert!(v[1].cause.ends_with("(전원 어댑터 사용 중)"));
 
-        let v = mac(Some(1200), Some(5), MacPower::Battery, Some(60), false);
+        let v = mac_in(Lang::Ko, Some(1200), Some(5), MacPower::Battery, Some(60), false);
         assert_eq!(v[0].after_seconds, 360, "디스플레이 5분 + 암호 요구 1분");
         assert_eq!(v[0].cause, "입력이 없으면 5분 뒤 디스플레이가 꺼지고 1분 뒤 암호를 요구합니다 (배터리 사용 중)");
         assert!(v[0].setting.as_deref().unwrap().contains("'배터리 사용 시 비활성 상태인 경우 디스플레이 끄기'"));
@@ -305,14 +490,14 @@ mod tests {
     #[test]
     fn mac_screensaver_in_wallpaper_settings() {
         // 최근 맥: 화면 보호기 시작 시간은 배경화면 설정에, 디스플레이 끄기는 그대로 잠금 화면 설정에 있다
-        let v = mac(Some(300), Some(5), MacPower::Battery, Some(0), true);
+        let v = mac_in(Lang::Ko, Some(300), Some(5), MacPower::Battery, Some(0), true);
         assert_eq!(v[0].setting.as_deref(), Some("시스템 설정 > 배경화면의 '화면 보호기 시작'"));
         assert_eq!(v[0].button.as_deref(), Some("배경화면 설정 열기"));
         assert_eq!(v[0].target, Some(SettingsTarget::MacWallpaper));
         assert_eq!(v[1].target, Some(SettingsTarget::MacLockScreen));
 
         let s = settings_with(&[("우리집", 3600)], 300, 180);
-        let n = note("맥", &v, &s).unwrap();
+        let n = note_in(Lang::Ko, "맥", &v, &s).unwrap();
         assert!(n.explanation.ends_with(
             "시스템 설정 > 배경화면의 '화면 보호기 시작', 시스템 설정 > 잠금 화면의 '배터리 사용 시 비활성 상태인 경우 디스플레이 끄기'를 1시간 이상으로 바꿔 주세요."
         ));
@@ -321,10 +506,10 @@ mod tests {
 
     #[test]
     fn mac_without_password_or_timers() {
-        assert!(mac(Some(300), Some(5), MacPower::Battery, None, false).is_empty(), "암호를 요구하지 않으면 잠기지 않음");
-        assert!(mac(Some(0), Some(0), MacPower::Adapter, Some(0), false).is_empty(), "안 함");
-        assert!(mac(None, None, MacPower::AdapterOnly, Some(0), false).is_empty());
-        let v = mac(None, Some(10), MacPower::AdapterOnly, Some(0), false);
+        assert!(mac_in(Lang::Ko, Some(300), Some(5), MacPower::Battery, None, false).is_empty(), "암호를 요구하지 않으면 잠기지 않음");
+        assert!(mac_in(Lang::Ko, Some(0), Some(0), MacPower::Adapter, Some(0), false).is_empty(), "안 함");
+        assert!(mac_in(Lang::Ko, None, None, MacPower::AdapterOnly, Some(0), false).is_empty());
+        let v = mac_in(Lang::Ko, None, Some(10), MacPower::AdapterOnly, Some(0), false);
         assert_eq!(v[0].setting.as_deref(), Some("시스템 설정 > 잠금 화면의 '비활성 상태인 경우 디스플레이 끄기'"));
     }
 
@@ -339,19 +524,19 @@ mod tests {
             wake_lock_delay: Some(0),
             modern_standby: false,
         };
-        let v = windows(&i);
+        let v = windows_in(Lang::Ko, &i);
         assert_eq!(v.iter().map(|x| x.after_seconds).collect::<Vec<_>>(), vec![600, 900, 1800], "모던 스탠바이가 아니면 화면 끄기로는 잠기지 않음");
         assert!(v[1].setting.is_none(), "관리 정책은 바꿀 수 없음");
 
-        let v = windows(&WindowsInputs { modern_standby: true, ..i.clone() });
+        let v = windows_in(Lang::Ko, &WindowsInputs { modern_standby: true, ..i.clone() });
         assert_eq!(v[0].after_seconds, 300);
         assert!(v[0].cause.ends_with("(전원 연결 중)"));
 
-        let v = windows(&WindowsInputs { modern_standby: true, wake_lock_delay: Some(60), ..i.clone() });
+        let v = windows_in(Lang::Ko, &WindowsInputs { modern_standby: true, wake_lock_delay: Some(60), ..i.clone() });
         assert_eq!(v[0].after_seconds, 360, "화면 끄기 5분 + 로그인 요구까지 1분");
         assert!(v[0].cause.contains("1분 뒤부터는 다시 켤 때 로그인해야 합니다"));
 
-        let v = windows(&WindowsInputs { wake_lock_delay: None, screensaver: Some((600, false)), inactivity_limit: None, ..i });
+        let v = windows_in(Lang::Ko, &WindowsInputs { wake_lock_delay: None, screensaver: Some((600, false)), inactivity_limit: None, ..i });
         assert!(v.is_empty(), "로그인 요구가 없으면 잠기지 않음");
     }
 
@@ -372,8 +557,8 @@ mod tests {
     #[test]
     fn note_for_shorter_system_lock() {
         let s = settings_with(&[("우리집", 3600), ("카페", 300)], 300, 180);
-        let locks = mac(Some(300), Some(60), MacPower::Adapter, Some(0), false);
-        let n = note("맥", &locks, &s).expect("우리집 1시간이 5분이 됨");
+        let locks = mac_in(Lang::Ko, Some(300), Some(60), MacPower::Adapter, Some(0), false);
+        let n = note_in(Lang::Ko, "맥", &locks, &s).expect("우리집 1시간이 5분이 됨");
         assert_eq!(n.title, "맥 설정 때문에 5분이면 잠깁니다");
         assert_eq!(
             n.explanation,
@@ -383,45 +568,83 @@ mod tests {
         assert_eq!(n.button.as_deref(), Some("잠금 화면 설정 열기"));
 
         // 배터리: 화면 보호기와 디스플레이 끄기 둘 다 5분이면 둘 다 고치라고 알린다
-        let locks = mac(Some(300), Some(5), MacPower::Battery, Some(0), false);
-        let n = note("맥", &locks, &s).unwrap();
+        let locks = mac_in(Lang::Ko, Some(300), Some(5), MacPower::Battery, Some(0), false);
+        let n = note_in(Lang::Ko, "맥", &locks, &s).unwrap();
         assert!(n.explanation.contains("'비활성 상태인 경우 화면 보호기 시작', 시스템 설정 > 잠금 화면의 '배터리 사용 시 비활성 상태인 경우 디스플레이 끄기'를 1시간 이상으로"));
 
         // 잠그지 않음 규칙은 '안 함'으로
         let s2 = settings_with(&[("서재", 0)], 300, 180);
-        assert!(note("맥", &locks, &s2).unwrap().explanation.contains("'안 함'으로 바꿔 주세요"));
+        assert!(note_in(Lang::Ko, "맥", &locks, &s2).unwrap().explanation.contains("'안 함'으로 바꿔 주세요"));
     }
 
     #[test]
     fn no_note_when_system_lock_is_longer_or_app_off() {
         let s = settings_with(&[("우리집", 1800)], 300, 180);
-        assert!(note("맥", &mac(Some(3600), Some(60), MacPower::Adapter, Some(0), false), &s).is_none());
-        assert!(note("맥", &[], &s).is_none());
+        assert!(note_in(Lang::Ko, "맥", &mac_in(Lang::Ko, Some(3600), Some(60), MacPower::Adapter, Some(0), false), &s).is_none());
+        assert!(note_in(Lang::Ko, "맥", &[], &s).is_none());
         let off = AppSettings { enabled: false, ..s.clone() };
-        assert!(note("맥", &mac(Some(300), None, MacPower::Adapter, Some(0), false), &off).is_none());
+        assert!(note_in(Lang::Ko, "맥", &mac_in(Lang::Ko, Some(300), None, MacPower::Adapter, Some(0), false), &off).is_none());
     }
 
     #[test]
     fn note_particles_and_policy() {
         let s = settings_with(&[("회사", 3600)], 300, 180);
-        let n = note("데스크톱", &gnome(30, true, 0), &s).unwrap();
+        let n = note_in(Lang::Ko, "데스크톱", &gnome_in(Lang::Ko, 30, true, 0), &s).unwrap();
         assert_eq!(n.title, "데스크톱 설정 때문에 30초면 잠깁니다");
         assert!(n.explanation.contains("실제로는 30초가 됩니다"));
-        let policy = windows(&WindowsInputs { inactivity_limit: Some(900), ..Default::default() });
-        let n = note("윈도우", &policy, &s).unwrap();
+        let policy = windows_in(Lang::Ko, &WindowsInputs { inactivity_limit: Some(900), ..Default::default() });
+        let n = note_in(Lang::Ko, "윈도우", &policy, &s).unwrap();
         assert!(n.explanation.ends_with("관리자가 정한 정책은 여기서 바꿀 수 없습니다."));
         assert_eq!(n.button, None);
     }
 
     #[test]
     fn linux_desktops() {
-        let v = gnome(300, true, 0);
+        let v = gnome_in(Lang::Ko, 300, true, 0);
         assert_eq!(v[0].after_seconds, 300);
         assert_eq!(v[0].cause, "입력이 없으면 5분 뒤 화면이 꺼지고 바로 잠깁니다");
-        assert_eq!(gnome(300, true, 30)[0].after_seconds, 330);
-        assert!(gnome(300, false, 0).is_empty());
-        assert!(gnome(0, true, 0).is_empty());
-        assert_eq!(kde(true, 5, 5)[0].after_seconds, 305);
-        assert!(kde(false, 5, 5).is_empty());
+        assert_eq!(gnome_in(Lang::Ko, 300, true, 30)[0].after_seconds, 330);
+        assert!(gnome_in(Lang::Ko, 300, false, 0).is_empty());
+        assert!(gnome_in(Lang::Ko, 0, true, 0).is_empty());
+        assert_eq!(kde_in(Lang::Ko, true, 5, 5)[0].after_seconds, 305);
+        assert!(kde_in(Lang::Ko, false, 5, 5).is_empty());
+    }
+
+    #[test]
+    fn english_autolock_notes() {
+        let s = settings_with(&[("Home", 3600)], 300, 180);
+        let locks = mac_in(Lang::En, Some(300), Some(60), MacPower::Adapter, Some(0), true);
+        let n = note_in(Lang::En, "macOS", &locks, &s).unwrap();
+        assert_eq!(n.title, "macOS settings will lock the screen after 5 min");
+        assert_eq!(
+            n.explanation,
+            "After 5 min of inactivity, the screen saver starts and requires a password immediately. Longer lock times set in this app will effectively be limited to 5 min: Home 1 hr. \
+             To use this app's lock times, change System Settings > Wallpaper > 'Start Screen Saver' to at least 1 hr."
+        );
+        assert_eq!(n.button.as_deref(), Some("Open Wallpaper Settings"));
+
+        let s_never = settings_with(&[("Home", 0)], 300, 180);
+        let n_never = note_in(Lang::En, "macOS", &locks, &s_never).unwrap();
+        assert!(n_never.explanation.contains("to 'Never'."));
+
+        let win = windows_in(
+            Lang::En,
+            &WindowsInputs {
+                on_battery: true,
+                inactivity_limit: Some(900),
+                display_off: Some(300),
+                wake_lock_delay: Some(0),
+                modern_standby: true,
+                ..Default::default()
+            },
+        );
+        let wn = note_in(Lang::En, "Windows", &win, &s).unwrap();
+        assert!(wn.explanation.contains("(on battery)"));
+        assert!(wn.explanation.contains("Policies set by an administrator cannot be changed here."));
+
+        let gn = gnome_in(Lang::En, 300, true, 10);
+        assert_eq!(gn[0].cause, "After 5 min of inactivity, the screen goes blank and locks after 10 sec");
+        let kd = kde_in(Lang::En, true, 5, 0);
+        assert_eq!(kd[0].button.as_deref(), Some("Open Screen Locking Settings"));
     }
 }

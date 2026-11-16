@@ -95,7 +95,7 @@ public enum PolicyResolver {
     /// 현재 네트워크를 규칙으로 만든다. 연결되어 있지 않거나 식별할 정보가 없으면 nil.
     public static func makeRule(for snapshot: WiFiSnapshot, timeoutSeconds: Int = AppSettings.defaultTrustedTimeout) -> NetworkRule? {
         guard snapshot.isConnected, snapshot.ssid != nil || snapshot.routerMAC != nil else { return nil }
-        let name = snapshot.ssid ?? "공유기 \(snapshot.routerMAC!)"
+        let name = snapshot.ssid ?? AppLang.pick("공유기 \(snapshot.routerMAC!)", "Router \(snapshot.routerMAC!)")
         return NetworkRule(name: name, ssid: snapshot.ssid, routerMAC: snapshot.routerMAC, timeoutSeconds: timeoutSeconds)
     }
 }

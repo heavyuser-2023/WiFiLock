@@ -1,12 +1,13 @@
 import AppKit
 import Foundation
 import os
+import WiFiLockCore
 
 enum AppInfo {
     static let bundleID = Bundle.main.bundleIdentifier ?? "com.wifilock.WiFiLock"
-    static let displayName = "와이파이 잠금"
+    static var displayName: String { AppLang.pick("와이파이 잠금", "WiFiLock") }
     static var version: String {
-        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "개발판"
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? AppLang.pick("개발판", "Dev")
         let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
         return "\(v) (\(b))"
     }
@@ -28,6 +29,8 @@ struct LaunchOptions {
     var noLocationPrompt = false
     /// 시작하자마자 설정 창 열기
     var openSettings = false
+    /// 표시 언어 강제 지정 (`ko` / `en`)
+    var lang: AppLang?
 
     static func parse(_ args: [String]) -> LaunchOptions {
         var o = LaunchOptions()
@@ -41,6 +44,7 @@ struct LaunchOptions {
             case "--override-timeout": o.overrideTimeout = it.next().flatMap(Int.init)
             case "--no-location-prompt": o.noLocationPrompt = true
             case "--open-settings": o.openSettings = true
+            case "--lang": o.lang = it.next().flatMap(AppLang.parse)
             default: break // -NSDocumentRevisionsDebugMode 같은 시스템 인자는 무시
             }
         }
@@ -88,7 +92,12 @@ enum Icons {
         let names = active ? ["lock.display", "lock.fill"] : ["lock.open.display", "lock.open.fill"]
         let config = NSImage.SymbolConfiguration(pointSize: 15, weight: warning ? .bold : .regular)
         for name in names {
-            if let img = NSImage(systemSymbolName: name, accessibilityDescription: active ? "자동 잠금 동작 중" : "자동 잠금 쉬는 중")?
+            if let img = NSImage(
+                systemSymbolName: name,
+                accessibilityDescription: active
+                    ? AppLang.pick("자동 잠금 동작 중", "Auto-lock active")
+                    : AppLang.pick("자동 잠금 쉬는 중", "Auto-lock paused")
+            )?
                 .withSymbolConfiguration(config) {
                 img.isTemplate = true
                 return img

@@ -36,7 +36,11 @@ pub fn set_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
             Ok(())
         }
         Err(e) => {
-            let msg = format!("자동 실행 설정을 바꾸지 못했습니다: {e}");
+            let msg = if wifilock_core::i18n::is_ko() {
+                format!("자동 실행 설정을 바꾸지 못했습니다: {e}")
+            } else {
+                format!("Failed to change launch at login setting: {e}")
+            };
             logging::error(&msg);
             Err(msg)
         }
@@ -112,6 +116,8 @@ fn use_small_async_runtime() {
 
 fn main() {
     let opts = Options::parse(std::env::args());
+    let lang = opts.lang.unwrap_or_else(wifilock_platform::system_lang);
+    wifilock_core::i18n::set(lang);
     let is_self_test = opts.is_self_test();
     use_small_async_runtime();
 

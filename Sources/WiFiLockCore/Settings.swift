@@ -32,7 +32,7 @@ public struct NetworkRule: Codable, Identifiable, Equatable, Hashable {
         let rawMAC = try? c.decodeIfPresent(String.self, forKey: .routerMAC)
         routerMAC = rawMAC.flatMap { MACAddress.normalize($0) }
         timeoutSeconds = max(0, (try? c.decode(Int.self, forKey: .timeoutSeconds)) ?? AppSettings.defaultTrustedTimeout)
-        if name.isEmpty { name = ssid ?? routerMAC ?? "네트워크" }
+        if name.isEmpty { name = ssid ?? routerMAC ?? AppLang.pick("네트워크", "Network") }
     }
 }
 

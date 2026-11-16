@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::i18n;
 use crate::policy::{PolicyResolver, WiFiSnapshot};
 use crate::settings::{AppSettings, NetworkRule, DEFAULT_TRUSTED_TIMEOUT};
 
@@ -100,7 +101,12 @@ impl SettingsStore {
         // 이름이 같은 다른 공유기의 네트워크가 이미 있으면 구분할 수 있게 공유기 주소 끝자리를 붙인다.
         if self.settings.rules.iter().any(|r| r.name == rule.name) {
             if let Some(mac) = &rule.router_mac {
-                rule.name = format!("{} (공유기 …{})", rule.name, &mac[mac.len() - 5..]);
+                let suffix = &mac[mac.len() - 5..];
+                rule.name = if i18n::is_ko() {
+                    format!("{} (공유기 …{})", rule.name, suffix)
+                } else {
+                    format!("{} (Router …{})", rule.name, suffix)
+                };
             }
         }
         let added = rule.clone();
