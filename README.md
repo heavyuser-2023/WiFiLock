@@ -106,6 +106,18 @@ cd cross && npm ci && cargo test --workspace && npx tauri build
 
 처음 만든 맥 전용판은 저장소 최상위의 `Sources/`, `scripts/`, `packaging/` 에 그대로 있습니다. 설명은 [docs/macos-swift-1.x.md](docs/macos-swift-1.x.md), 설치 파일은 [v1.0.0 릴리스](https://github.com/heavyuser-2023/WiFiLock/releases/tag/v1.0.0)에 있습니다.
 
+## 코드 서명 및 개인정보 보호 정책 (Code Signing & Privacy Policy)
+
+### 코드 서명 정책 (Code Signing Policy)
+- Windows용 실행 파일(`wifilock.exe`) 및 설치 파일(`WiFiLock_*_x64-setup.exe`, `WiFiLock_*_x64_en-US.msi`)은 공개 저장소(`heavyuser-2023/WiFiLock`)의 소스 코드를 바탕으로 GitHub Actions(`.github/workflows/cross-build.yml`)에서 빌드된 결과물만 서명합니다.
+- Free code signing on Windows provided by [SignPath.io](https://signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+- **팀 역할 (Team Roles)**: 저장소 유지 관리자(`heavyuser-2023`)가 커미터(Committers), 검토자(Reviewers), 승인자(Approvers) 역할을 담당하며, 서명 요청은 검증된 GitHub Actions 워크플로를 통해서만 제출됩니다. 자세한 설정 방법은 [docs/windows-code-signing.md](docs/windows-code-signing.md)를 참고하세요.
+
+### 개인정보 보호 정책 (Privacy Policy)
+- 이 프로그램은 **어떠한 개인정보, 위치 정보, 와이파이 목록, 사용 기록, 오류 보고(텔레메트리)도 수집·저장하거나 외부 서버로 전송하지 않습니다.**
+- 운영체제의 위치 권한은 오직 현재 연결된 와이파이 이름(SSID)을 읽어 사용자가 직접 등록한 로컬 규칙(`settings.json`)과 비교하기 위해서만 사용됩니다.
+- **Privacy Policy (English)**: This application does not collect, store, or transmit any personal information, location coordinates, Wi-Fi network history, usage telemetry, or crash reports to any external server. Location permission is requested solely by the operating system to read the current Wi-Fi SSID for matching local auto-lock rules.
+
 ## 라이선스
 
 [MIT 라이선스](LICENSE)로 공개합니다.

@@ -88,6 +88,7 @@ npx tauri build
 - 맥 범용(애플 실리콘·인텔): `npx tauri build --target universal-apple-darwin --bundles app,dmg`
 - 리눅스는 `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm` 이 필요합니다. 도커로 빌드하려면 `docker/linux-build.Dockerfile` 을 쓰세요.
 - 윈도우·리눅스 설치 파일은 깃허브 자동 빌드(`.github/workflows/cross-build.yml`)가 각 운영체제 서버에서 만들고, 자가 진단까지 돌린 뒤 결과물로 올립니다.
+- 윈도우 빌드(`wifilock.exe`, `WiFiLock_*_x64-setup.exe`, `WiFiLock_*_x64_en-US.msi`)는 [SignPath Foundation](https://signpath.org) 연동을 지원하며, `SIGNPATH_ORGANIZATION_ID` 및 `SIGNPATH_API_TOKEN` 설정 시 CI에서 자동으로 코드 서명(`SignPath.io`)을 수행합니다. 자세한 설정 방법은 [docs/windows-code-signing.md](../docs/windows-code-signing.md)를 보세요.
 
 ## 자가 진단
 
