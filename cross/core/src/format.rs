@@ -148,8 +148,7 @@ pub fn state_text_in(lang: Lang, state: &EngineState) -> String {
             EngineState::Paused { until: None } => "일시 중지됨 (다시 시작할 때까지)".into(),
             EngineState::NeverLock => "이 네트워크에서는 자동으로 잠그지 않음".into(),
             EngineState::HeldByAssertion { holders } => {
-                let names: Vec<&str> = holders.iter().take(2).map(String::as_str).collect();
-                format!("잠금 보류: {} 이(가) 화면 유지 중", names.join(", "))
+                format!("{} · {}", held_headline_in(lang), held_holders_in(lang, holders))
             }
             EngineState::ScreenLocked => "화면 잠김".into(),
             EngineState::Counting { remaining, .. } => format!("잠금까지 {} 남음", countdown(*remaining)),
@@ -164,8 +163,7 @@ pub fn state_text_in(lang: Lang, state: &EngineState) -> String {
             EngineState::Paused { until: None } => "Paused (until resumed)".into(),
             EngineState::NeverLock => "Never auto-lock on this network".into(),
             EngineState::HeldByAssertion { holders } => {
-                let names: Vec<&str> = holders.iter().take(2).map(String::as_str).collect();
-                format!("Lock on hold: {} keeping screen awake", names.join(", "))
+                format!("{} · {}", held_headline_in(lang), held_holders_in(lang, holders))
             }
             EngineState::ScreenLocked => "Screen locked".into(),
             EngineState::Counting { remaining, .. } => format!("Locks in {}", countdown(*remaining)),
@@ -175,6 +173,59 @@ pub fn state_text_in(lang: Lang, state: &EngineState) -> String {
             EngineState::IdleUnavailable => "Cannot read idle time on this desktop".into(),
         },
     }
+}
+
+// ---------- 다른 앱이 화면을 켜 두어 잠금을 보류할 때 ----------
+// 메뉴 막대에는 짧은 글자, 메뉴에는 "잠기지 않음 / 어떤 앱 때문인지 / 언제 다시 동작하는지" 세 줄로 알린다.
+
+/// 화면 유지를 요청한 앱을 몇 개까지 이름으로 보여 줄지 (나머지는 개수로)
+const HELD_NAMES_SHOWN: usize = 3;
+
+/// 메뉴 막대 아이콘 옆 글자: "잠금 보류"/"On hold"
+pub fn menu_bar_held() -> String {
+    menu_bar_held_in(i18n::current())
+}
+
+pub fn menu_bar_held_in(lang: Lang) -> String {
+    lang.pick("잠금 보류", "On hold").into()
+}
+
+/// 메뉴 첫 줄: 지금은 잠기지 않는다는 것을 분명히 알린다.
+pub fn held_headline() -> String {
+    held_headline_in(i18n::current())
+}
+
+pub fn held_headline_in(lang: Lang) -> String {
+    lang.pick("지금은 자동으로 잠기지 않음", "Won't auto-lock right now").into()
+}
+
+/// 메뉴 둘째 줄: 어떤 앱이 화면을 켜 두고 있는지 ("화면 유지 요청: Zoom, VLC 외 1개")
+pub fn held_holders(holders: &[String]) -> String {
+    held_holders_in(i18n::current(), holders)
+}
+
+pub fn held_holders_in(lang: Lang, holders: &[String]) -> String {
+    let mut names = holders.iter().take(HELD_NAMES_SHOWN).map(String::as_str).collect::<Vec<_>>().join(", ");
+    let more = holders.len().saturating_sub(HELD_NAMES_SHOWN);
+    if more > 0 {
+        names.push_str(&match lang {
+            Lang::Ko => format!(" 외 {more}개"),
+            Lang::En => format!(" +{more} more"),
+        });
+    }
+    match lang {
+        Lang::Ko => format!("화면 유지 요청: {names}"),
+        Lang::En => format!("Keeping screen awake: {names}"),
+    }
+}
+
+/// 메뉴 셋째 줄: 언제 다시 잠그는지
+pub fn held_hint() -> String {
+    held_hint_in(i18n::current())
+}
+
+pub fn held_hint_in(lang: Lang) -> String {
+    lang.pick("요청이 끝나면 자동 잠금이 다시 동작합니다", "Auto-lock resumes when the request ends").into()
 }
 
 #[cfg(test)]
@@ -235,7 +286,7 @@ mod tests {
         assert_eq!(state_text_in(Lang::Ko, &EngineState::Warning { remaining: 4.1 }), "곧 잠김: 5초");
         assert_eq!(
             state_text_in(Lang::Ko, &EngineState::HeldByAssertion { holders: vec!["가".into(), "나".into(), "다".into()] }),
-            "잠금 보류: 가, 나 이(가) 화면 유지 중"
+            "지금은 자동으로 잠기지 않음 · 화면 유지 요청: 가, 나, 다"
         );
         assert_eq!(state_text_in(Lang::Ko, &EngineState::Disabled), "자동 잠금이 꺼져 있음");
 
@@ -243,7 +294,7 @@ mod tests {
         assert_eq!(state_text_in(Lang::En, &EngineState::Warning { remaining: 4.1 }), "Locking soon: 5s");
         assert_eq!(
             state_text_in(Lang::En, &EngineState::HeldByAssertion { holders: vec!["VLC".into(), "Zoom".into(), "Obs".into()] }),
-            "Lock on hold: VLC, Zoom keeping screen awake"
+            "Won't auto-lock right now · Keeping screen awake: VLC, Zoom, Obs"
         );
         assert_eq!(state_text_in(Lang::En, &EngineState::Disabled), "Auto-lock is off");
         assert_eq!(state_text_in(Lang::En, &EngineState::Paused { until: None }), "Paused (until resumed)");
@@ -251,5 +302,23 @@ mod tests {
         assert_eq!(state_text_in(Lang::En, &EngineState::ScreenLocked), "Screen locked");
         assert_eq!(state_text_in(Lang::En, &EngineState::WaitingForActivity), "Locked · Timer resets on next activity");
         assert_eq!(state_text_in(Lang::En, &EngineState::IdleUnavailable), "Cannot read idle time on this desktop");
+    }
+
+    #[test]
+    fn held_texts() {
+        let one = vec!["QuickTime Player".to_string()];
+        let five: Vec<String> = ["Zoom", "VLC", "Keynote", "Chrome", "OBS"].iter().map(|s| s.to_string()).collect();
+
+        assert_eq!(menu_bar_held_in(Lang::Ko), "잠금 보류");
+        assert_eq!(held_headline_in(Lang::Ko), "지금은 자동으로 잠기지 않음");
+        assert_eq!(held_holders_in(Lang::Ko, &one), "화면 유지 요청: QuickTime Player");
+        assert_eq!(held_holders_in(Lang::Ko, &five), "화면 유지 요청: Zoom, VLC, Keynote 외 2개");
+        assert_eq!(held_hint_in(Lang::Ko), "요청이 끝나면 자동 잠금이 다시 동작합니다");
+
+        assert_eq!(menu_bar_held_in(Lang::En), "On hold");
+        assert_eq!(held_headline_in(Lang::En), "Won't auto-lock right now");
+        assert_eq!(held_holders_in(Lang::En, &one), "Keeping screen awake: QuickTime Player");
+        assert_eq!(held_holders_in(Lang::En, &five), "Keeping screen awake: Zoom, VLC, Keynote +2 more");
+        assert_eq!(held_hint_in(Lang::En), "Auto-lock resumes when the request ends");
     }
 }

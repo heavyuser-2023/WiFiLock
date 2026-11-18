@@ -21,6 +21,8 @@ pub enum IconKind {
     Active,
     Inactive,
     Warning,
+    /// 다른 앱이 화면을 켜 두어 잠금을 보류 중 (켜진 화면 + 열린 자물쇠)
+    Held,
 }
 
 /// 메뉴 구조를 바꿔야 하는 값들 (바뀌면 메뉴를 새로 만든다)
@@ -29,6 +31,8 @@ pub struct MenuStructure {
     pub lang: Option<Lang>,
     pub enabled: bool,
     pub paused: bool,
+    /// 잠금 보류 중이면 그 까닭과 안내 줄을 더한다
+    pub held: bool,
     pub show_permission: bool,
     pub add_label: Option<String>,
 }
@@ -41,6 +45,8 @@ pub struct UiSnapshot {
     pub network: String,
     pub policy: String,
     pub state: String,
+    /// 잠금 보류 중일 때 화면 유지를 요청한 앱 줄 (아니면 빈 글자)
+    pub holders: String,
     pub structure: MenuStructure,
     /// Some 이면 경고 창에 보여 줄 남은 초
     pub hud: Option<i64>,
@@ -107,12 +113,21 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
     let location = *lock(&st.location);
     let snap = &status.snapshot;
 
+    let held = match &status.state {
+        EngineState::HeldByAssertion { holders } => Some(holders.as_slice()),
+        _ => None,
+    };
     let icon = match status.state {
         EngineState::Warning { .. } => IconKind::Warning,
+        EngineState::HeldByAssertion { .. } => IconKind::Held,
         ref s if is_active(s) => IconKind::Active,
         _ => IconKind::Inactive,
     };
-    let state_text = format::state_text(&status.state);
+    // 보류 중이면 메뉴 첫 줄은 "잠기지 않음"만 쓰고, 앱 이름은 다음 줄에 따로 보인다.
+    let state_text = match held {
+        Some(_) => format::held_headline(),
+        None => format::state_text(&status.state),
+    };
     let policy = policy_text(&status);
     let ko = i18n::is_ko();
     let app_name = i18n::pick("와이파이 잠금", "WiFiLock");
@@ -124,9 +139,12 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         ref other => format!("{app_name} — {}", format::state_text(other)),
     };
     // 메뉴 막대 글자는 바뀔 때만 다시 그린다 (apply). 분 단위면 마지막 1분 전까지는 1분에 한 번만 바뀐다.
-    let title = if settings.show_countdown_in_menu_bar && cfg!(any(target_os = "macos", target_os = "linux")) {
+    // 잠금 보류는 남은 시간 표시를 꺼 두었어도 글자로 알린다 (아이콘만으로는 놓치기 쉬워서).
+    // 윈도우 알림 영역에는 글자를 둘 수 없어 아이콘과 도움말로 알린다.
+    let title = if cfg!(any(target_os = "macos", target_os = "linux")) {
         match status.state {
-            EngineState::Counting { remaining, .. } | EngineState::Warning { remaining } => {
+            EngineState::HeldByAssertion { .. } => Some(format::menu_bar_held()),
+            EngineState::Counting { remaining, .. } | EngineState::Warning { remaining } if settings.show_countdown_in_menu_bar => {
                 Some(format::menu_bar_countdown(remaining, settings.countdown_in_minutes))
             }
             _ => None,
@@ -166,10 +184,12 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         network: network_text(snap),
         policy,
         state: state_text,
+        holders: held.map(format::held_holders).unwrap_or_default(),
         structure: MenuStructure {
             lang: Some(i18n::current()),
             enabled: settings.enabled,
             paused: status.paused,
+            held: held.is_some(),
             show_permission: snap.is_connected() && !location.has_permission(),
             add_label,
         },
@@ -195,13 +215,15 @@ pub fn tray_image(kind: IconKind) -> Image<'static> {
     #[cfg(target_os = "macos")]
     let bytes: &'static [u8] = match kind {
         IconKind::Inactive => include_bytes!("../icons/tray/mac-inactive.png"),
-        _ => include_bytes!("../icons/tray/mac-active.png"),
+        IconKind::Held => include_bytes!("../icons/tray/mac-held.png"),
+        IconKind::Active | IconKind::Warning => include_bytes!("../icons/tray/mac-active.png"),
     };
     #[cfg(not(target_os = "macos"))]
     let bytes: &'static [u8] = match kind {
         IconKind::Active => include_bytes!("../icons/tray/color-active.png"),
         IconKind::Inactive => include_bytes!("../icons/tray/color-inactive.png"),
         IconKind::Warning => include_bytes!("../icons/tray/color-warning.png"),
+        IconKind::Held => include_bytes!("../icons/tray/color-held.png"),
     };
     Image::from_bytes(bytes).expect("아이콘 그림")
 }
@@ -243,6 +265,9 @@ fn apply(app: &AppHandle, snap: UiSnapshot) {
         }
         if p.map(|p| &p.state) != Some(&snap.state) {
             let _ = h.state.set_text(&snap.state);
+        }
+        if p.map(|p| &p.holders) != Some(&snap.holders) {
+            let _ = h.holders.set_text(&snap.holders);
         }
     }
 

@@ -198,10 +198,10 @@ impl SelfTest {
         }
         #[cfg(target_os = "macos")]
         self.check_macos_signature();
-        let images_ok = [IconKind::Active, IconKind::Inactive, IconKind::Warning]
+        let images_ok = [IconKind::Active, IconKind::Inactive, IconKind::Warning, IconKind::Held]
             .iter()
             .all(|k| ui::tray_image(*k).width() > 0);
-        self.check("메뉴 아이콘 그림 3종", images_ok, "");
+        self.check("메뉴 아이콘 그림 4종", images_ok, "");
     }
 
     /// 맥: 강화된 실행 환경으로 서명된 앱은 위치 접근 엔타이틀먼트가 있어야 위치 권한 요청 창이 뜬다.
@@ -573,13 +573,37 @@ impl SelfTest {
             f.holders = vec!["동영상 재생기".into()];
         });
         self.advance(200);
-        let (_, _, s, _, _) = self.menu_texts();
-        self.check("동영상 재생 중 보류 표시", s.contains("잠금 보류") && s.contains("동영상 재생기"), s);
+        let (_, _, s, _, ids) = self.menu_texts();
+        let holders_line = lock(&st.menu).as_ref().map(|h| h.holders.clone());
+        let holders_line = holders_line.and_then(|h| h.text().ok()).unwrap_or_default();
+        let has = |id: &str| ids.iter().any(|i| i == id);
+        self.check(
+            "보류 중 메뉴: 잠기지 않음·요청한 앱·다시 동작 안내",
+            s == "지금은 자동으로 잠기지 않음"
+                && holders_line == "화면 유지 요청: 동영상 재생기"
+                && has("status-holders")
+                && has("status-held-hint"),
+            format!("{s} / {holders_line}"),
+        );
+        // 아이콘은 "켜진 화면 + 열린 자물쇠"로 바뀌고, 맥·리눅스는 남은 시간 표시를 꺼 두었어도 아이콘 옆에 글자로 알린다.
+        let shown = lock(&st.ui).as_ref().map(|u| (u.icon, u.title.clone(), u.tooltip.clone()));
+        let (icon, title, tooltip) = shown.unwrap_or((IconKind::Active, None, String::new()));
+        let title_ok = if cfg!(target_os = "windows") { title.is_none() } else { title.as_deref() == Some("잠금 보류") };
+        self.check(
+            "보류 중 아이콘·메뉴 막대 글자·도움말",
+            icon == IconKind::Held && title_ok && tooltip.contains("잠기지 않음") && tooltip.contains("동영상 재생기"),
+            format!("{icon:?} / {title:?} / {tooltip}"),
+        );
         self.set_fake(|f| {
             f.holders.clear();
             f.idle = 0.0;
         });
         self.tick();
+        let (_, _, _, _, ids) = self.menu_texts();
+        let shown = lock(&st.ui).as_ref().map(|u| (u.icon, u.title.clone()));
+        let back = shown.as_ref().is_some_and(|(icon, title)| *icon == IconKind::Active && title.is_none())
+            && !ids.iter().any(|i| i == "status-holders" || i == "status-held-hint");
+        self.check("보류가 끝나면 아이콘·메뉴 원래대로", back, format!("{shown:?}"));
     }
 
     // ---------- 6. 설정 창 ----------
