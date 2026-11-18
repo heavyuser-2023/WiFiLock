@@ -13,6 +13,8 @@ pub struct MenuHandles {
     pub network: MenuItem<Wry>,
     pub policy: MenuItem<Wry>,
     pub state: MenuItem<Wry>,
+    /// 잠금 보류 중일 때만 메뉴에 들어가는 "화면 유지 요청: …" 줄
+    pub holders: MenuItem<Wry>,
     pub enabled: CheckMenuItem<Wry>,
     /// 지금 메뉴에 보이는 최상위 항목 식별자들 (자가 진단 확인용)
     pub ids: Vec<String>,
@@ -37,6 +39,8 @@ pub fn build(app: &AppHandle, snap: &UiSnapshot) -> tauri::Result<(Menu<Wry>, Me
     let network = MenuItem::with_id(app, "status-network", &snap.network, false, None::<&str>)?;
     let policy = MenuItem::with_id(app, "status-policy", &snap.policy, false, None::<&str>)?;
     let state_item = MenuItem::with_id(app, "status-state", &snap.state, false, None::<&str>)?;
+    let holders = MenuItem::with_id(app, "status-holders", &snap.holders, false, None::<&str>)?;
+    let held_hint = MenuItem::with_id(app, "status-held-hint", wifilock_core::format::held_hint(), false, None::<&str>)?;
     let permission = MenuItem::with_id(
         app,
         "permission",
@@ -99,6 +103,10 @@ pub fn build(app: &AppHandle, snap: &UiSnapshot) -> tauri::Result<(Menu<Wry>, Me
     add!(&network, "status-network");
     add!(&policy, "status-policy");
     add!(&state_item, "status-state");
+    if s.held {
+        add!(&holders, "status-holders");
+        add!(&held_hint, "status-held-hint");
+    }
     if s.show_permission {
         add!(&permission, "permission");
     }
@@ -120,7 +128,7 @@ pub fn build(app: &AppHandle, snap: &UiSnapshot) -> tauri::Result<(Menu<Wry>, Me
     add!(&quit, "quit");
 
     let menu = Menu::with_items(app, &items)?;
-    Ok((menu, MenuHandles { network, policy, state: state_item, enabled, ids }))
+    Ok((menu, MenuHandles { network, policy, state: state_item, holders, enabled, ids }))
 }
 
 /// 메뉴 항목을 골랐을 때 (주 스레드)
