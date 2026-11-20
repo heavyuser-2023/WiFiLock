@@ -163,3 +163,40 @@ pub fn test_display_hold(on: bool) -> bool {
         false
     }
 }
+
+/// Windows MSIX(Microsoft Store) 패키지 신원으로 실행 중인지.
+pub fn is_packaged() -> bool {
+    #[cfg(windows)]
+    {
+        windows::is_packaged()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// 패키지 앱일 때 로그인 시 자동 실행 상태를 돌려준다. 일반 설치면 `None`.
+pub fn packaged_autostart_enabled() -> Option<bool> {
+    #[cfg(windows)]
+    {
+        windows::packaged_autostart_enabled()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// 패키지 앱일 때 로그인 시 자동 실행을 켜거나 끈다. 일반 설치면 `None`.
+pub fn set_packaged_autostart(enabled: bool) -> Option<Result<(), String>> {
+    #[cfg(windows)]
+    {
+        windows::set_packaged_autostart(enabled)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = enabled;
+        None
+    }
+}

@@ -21,26 +21,45 @@ use wifilock_core::SettingsStore;
 use crate::options::Options;
 use crate::state::AppState;
 
+pub fn refresh_autostart(app: &AppHandle) -> bool {
+    let enabled = wifilock_platform::packaged_autostart_enabled().unwrap_or_else(|| {
+        app.try_state::<tauri_plugin_autostart::AutoLaunchManager>()
+            .and_then(|m| m.is_enabled().ok())
+            .unwrap_or(false)
+    });
+    if let Some(st) = app.try_state::<Arc<AppState>>() {
+        st.autostart.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+    enabled
+}
+
 pub fn autostart_enabled(app: &AppHandle) -> bool {
-    app.try_state::<tauri_plugin_autostart::AutoLaunchManager>()
-        .and_then(|m| m.is_enabled().ok())
+    app.try_state::<Arc<AppState>>()
+        .map(|st| st.autostart.load(std::sync::atomic::Ordering::Relaxed))
         .unwrap_or(false)
 }
 
 pub fn set_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
-    let m = app.autolaunch();
-    let r = if enabled { m.enable() } else { m.disable() };
+    let r = if let Some(res) = wifilock_platform::set_packaged_autostart(enabled) {
+        res
+    } else {
+        let m = app.autolaunch();
+        let res = if enabled { m.enable() } else { m.disable() };
+        res.map_err(|e| {
+            if wifilock_core::i18n::is_ko() {
+                format!("자동 실행 설정을 바꾸지 못했습니다: {e}")
+            } else {
+                format!("Failed to change launch at login setting: {e}")
+            }
+        })
+    };
+    refresh_autostart(app);
     match r {
         Ok(()) => {
             logging::info(format!("로그인할 때 자동 실행 {}", if enabled { "켬" } else { "끔" }));
             Ok(())
         }
-        Err(e) => {
-            let msg = if wifilock_core::i18n::is_ko() {
-                format!("자동 실행 설정을 바꾸지 못했습니다: {e}")
-            } else {
-                format!("Failed to change launch at login setting: {e}")
-            };
+        Err(msg) => {
             logging::error(&msg);
             Err(msg)
         }
@@ -191,6 +210,7 @@ fn main() {
             let platform: Arc<dyn wifilock_platform::Platform> = Arc::from(wifilock_platform::create());
             let st = Arc::new(AppState::new(opts.clone(), platform, store));
             app.manage(st.clone());
+            refresh_autostart(&handle);
 
             // 메뉴 막대 전용 앱: 독에 나타나지 않게 한다.
             #[cfg(target_os = "macos")]

@@ -18,6 +18,7 @@
 | 맥 11 이상 (애플 실리콘·인텔) | `WiFiLock_2.4.0_universal.dmg` | 열어서 응용 프로그램 폴더로 끌어다 놓기 |
 | 윈도우 10·11 (x64) | `WiFiLock_2.4.0_x64-setup.exe` | 현재 사용자에게 설치 (관리자 권한 필요 없음), 한국어·영어 설치 화면 |
 | 윈도우 10·11 (x64) | `WiFiLock_2.4.0_x64_en-US.msi` | 회사 배포 도구용 |
+| 윈도우 10·11 (x64) | `WiFiLock_2.4.0_x64.msix` | Microsoft Store 제출용 MSIX 패키지 |
 | 우분투·데비안 (x64) | `WiFiLock_2.4.0_amd64.deb` | `sudo apt install ./WiFiLock_2.4.0_amd64.deb` |
 | 페도라 등 (x64) | `WiFiLock-2.4.0-1.x86_64.rpm` | `sudo dnf install ./WiFiLock-2.4.0-1.x86_64.rpm` |
 | 그 밖의 리눅스 (x64) | `WiFiLock_2.4.0_amd64.AppImage` | 실행 권한을 주고 바로 실행 |
@@ -90,7 +91,7 @@ npx tauri build
 - 맥 범용(애플 실리콘·인텔): `npx tauri build --target universal-apple-darwin --bundles app,dmg`
 - 리눅스는 `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf rpm` 이 필요합니다. 도커로 빌드하려면 `docker/linux-build.Dockerfile` 을 쓰세요.
 - 윈도우·리눅스 설치 파일은 깃허브 자동 빌드(`.github/workflows/cross-build.yml`)가 각 운영체제 서버에서 만들고, 자가 진단까지 돌린 뒤 결과물로 올립니다.
-- 윈도우 빌드(`wifilock.exe`, `WiFiLock_*_x64-setup.exe`, `WiFiLock_*_x64_en-US.msi`)는 [SignPath Foundation](https://signpath.org) 연동을 지원하며, `SIGNPATH_ORGANIZATION_ID` 및 `SIGNPATH_API_TOKEN` 설정 시 CI에서 자동으로 코드 서명(`SignPath.io`)을 수행합니다. 자세한 설정 방법은 [docs/windows-code-signing.md](../docs/windows-code-signing.md)를 보세요.
+- Microsoft Store 제출용 MSIX 패키지는 Windows에서 `./scripts/build-msix.ps1` 로 생성합니다(GitHub Actions Windows 잡에서 자동 빌드됨). 자세한 제출 절차는 [docs/microsoft-store.md](../docs/microsoft-store.md)를 보세요.
 
 ## 자가 진단
 

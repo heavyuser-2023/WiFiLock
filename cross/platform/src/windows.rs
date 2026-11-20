@@ -10,10 +10,12 @@
 use std::ffi::c_void;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
-use windows::core::{GUID, PWSTR};
-use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_BUFFER_OVERFLOW, ERROR_SUCCESS, HANDLE, NO_ERROR};
+use windows::ApplicationModel::{StartupTask, StartupTaskState};
+use windows::core::{GUID, HSTRING, PWSTR};
+use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_BUFFER_OVERFLOW, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, NO_ERROR};
+use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
 use windows::Win32::NetworkManagement::IpHelper::{
     FreeMibTable, GetAdaptersAddresses, GetIpNetTable2, GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST,
     GAA_FLAG_SKIP_DNS_SERVER, GAA_FLAG_SKIP_MULTICAST, IP_ADAPTER_ADDRESSES_LH, MIB_IPNET_TABLE2,
@@ -43,6 +45,119 @@ use crate::parse;
 use crate::{LocationStatus, Platform};
 
 const IF_TYPE_IEEE80211: u32 = 71;
+const STARTUP_TASK_ID: &str = "WiFiLockStartup";
+
+/// 현재 프로세스가 MSIX(Microsoft Store) 패키지 신원으로 실행 중인지.
+pub fn is_packaged() -> bool {
+    static PACKAGED: OnceLock<bool> = OnceLock::new();
+    *PACKAGED.get_or_init(|| {
+        let mut len = 0u32;
+        let rc = unsafe { GetCurrentPackageFullName(&mut len, None) };
+        rc == ERROR_INSUFFICIENT_BUFFER || rc == ERROR_SUCCESS
+    })
+}
+
+/// UI(STA) 스레드에서 WinRT 비동기 `.join()` 시 데드락을 피하기 위해 별도 MTA 스레드에서 실행한다.
+fn run_on_mta<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+    std::thread::Builder::new()
+        .name("wifilock-winrt".into())
+        .spawn(f)
+        .ok()?
+        .join()
+        .ok()
+}
+
+/// 패키지 앱일 때 Windows `StartupTask` 자동 실행 상태를 돌려준다. 일반 설치면 `None`.
+pub fn packaged_autostart_enabled() -> Option<bool> {
+    if !is_packaged() {
+        return None;
+    }
+    let enabled = run_on_mta(|| -> windows::core::Result<bool> {
+        let task = StartupTask::GetAsync(&HSTRING::from(STARTUP_TASK_ID))?.join()?;
+        let state = task.State()?;
+        Ok(matches!(state, StartupTaskState::Enabled | StartupTaskState::EnabledByPolicy))
+    })
+    .and_then(|r| r.ok())
+    .unwrap_or(false);
+    Some(enabled)
+}
+
+/// 패키지 앱일 때 Windows `StartupTask` 자동 실행을 켜거나 끈다. 일반 설치면 `None`.
+pub fn set_packaged_autostart(enabled: bool) -> Option<Result<(), String>> {
+    if !is_packaged() {
+        return None;
+    }
+    let ko = wifilock_core::i18n::is_ko();
+    let res = run_on_mta(move || -> Result<(), String> {
+        let err_msg = |detail: String| {
+            if ko {
+                format!("자동 실행 설정을 바꾸지 못했습니다: {detail}")
+            } else {
+                format!("Failed to change launch at login setting: {detail}")
+            }
+        };
+        let task = StartupTask::GetAsync(&HSTRING::from(STARTUP_TASK_ID))
+            .and_then(|op| op.join())
+            .map_err(|e| err_msg(e.to_string()))?;
+        let cur = task.State().map_err(|e| err_msg(e.to_string()))?;
+        if enabled {
+            match cur {
+                StartupTaskState::Enabled | StartupTaskState::EnabledByPolicy => Ok(()),
+                StartupTaskState::DisabledByUser => Err(if ko {
+                    "Windows 설정 > 앱 > 시작프로그램에서 WiFiLock을 직접 켜 주세요."
+                } else {
+                    "Please enable WiFiLock in Windows Settings > Apps > Startup."
+                }
+                .to_string()),
+                StartupTaskState::DisabledByPolicy => Err(if ko {
+                    "관리자 정책으로 시작프로그램 등록이 제한되어 있습니다."
+                } else {
+                    "Launch at login is disabled by organization policy."
+                }
+                .to_string()),
+                _ => {
+                    let next = task
+                        .RequestEnableAsync()
+                        .and_then(|op| op.join())
+                        .map_err(|e| err_msg(e.to_string()))?;
+                    match next {
+                        StartupTaskState::Enabled | StartupTaskState::EnabledByPolicy => Ok(()),
+                        StartupTaskState::DisabledByUser => Err(if ko {
+                            "Windows 설정 > 앱 > 시작프로그램에서 WiFiLock을 직접 켜 주세요."
+                        } else {
+                            "Please enable WiFiLock in Windows Settings > Apps > Startup."
+                        }
+                        .to_string()),
+                        _ => Err(if ko {
+                            "Windows가 시작프로그램 등록을 허용하지 않았습니다."
+                        } else {
+                            "Windows did not permit enabling launch at login."
+                        }
+                        .to_string()),
+                    }
+                }
+            }
+        } else if cur == StartupTaskState::EnabledByPolicy {
+            Err(if ko {
+                "관리자 정책으로 시작프로그램이 고정되어 있어 끌 수 없습니다."
+            } else {
+                "Launch at login is enforced by organization policy and cannot be disabled."
+            }
+            .to_string())
+        } else {
+            task.Disable().map_err(|e| err_msg(e.to_string()))
+        }
+    })
+    .unwrap_or_else(|| {
+        Err(if ko {
+            "자동 실행 작업 스레드를 시작하지 못했습니다."
+        } else {
+            "Failed to start autostart worker thread."
+        }
+        .to_string())
+    });
+    Some(res)
+}
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -405,6 +520,7 @@ impl Platform for WindowsPlatform {
 
     fn diagnostics(&self) -> Vec<(String, String)> {
         vec![
+            ("실행 형태".into(), if is_packaged() { "MSIX 패키지 (Microsoft Store)".into() } else { "일반 설치".into() }),
             ("자리비움 시간".into(), "GetLastInputInfo".into()),
             ("화면 잠그기".into(), "LockWorkStation".into()),
             ("잠김 여부".into(), "WTSQuerySessionInformationW(WTSSessionInfoEx)".into()),
