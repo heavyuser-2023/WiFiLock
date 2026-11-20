@@ -154,7 +154,7 @@ impl SelfTest {
         self.check_engine_and_hud();
         self.check_settings_window();
         self.check_persistence();
-        let auto = crate::autostart_enabled(&self.app);
+        let auto = crate::refresh_autostart(&self.app);
         self.info("로그인할 때 자동 실행 상태 읽기", if auto { "켜짐" } else { "꺼짐 (바꾸지 않음)" });
     }
 

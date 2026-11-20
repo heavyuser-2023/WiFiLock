@@ -10,13 +10,11 @@ on:
       # - main
     paths:
       - "cross/**"
-      - ".signpath/**"
       - ".github/workflows/cross-build.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: cross-build-${{ github.ref }}
@@ -85,13 +83,8 @@ jobs:
       - name: 빌드 도구 설치
         run: npm ci --no-audit --no-fund
 
-      - name: 설치 파일 빌드 (맥·리눅스)
-        if: matrix.key != 'windows'
+      - name: 설치 파일 빌드
         run: npx tauri build ${{ matrix.args }}
-
-      - name: 실행 파일 빌드 (윈도우)
-        if: matrix.key == 'windows'
-        run: npx tauri build --no-bundle
 
       - name: 자가 진단 (맥)
         if: matrix.key == 'macos'
@@ -115,97 +108,23 @@ jobs:
         shell: bash
         run: cat selftest/summary.txt || echo "결과 파일 없음"
 
-      - name: 미서명 윈도우 실행 파일 업로드 (SignPath 1차 서명용)
-        if: matrix.key == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
-        id: upload-unsigned-binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-windows-binary
-          path: cross/target/release/wifilock.exe
-          if-no-files-found: error
-
-      - name: SignPath 코드 서명 요청 (윈도우 실행 파일)
-        if: matrix.key == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'wifilock' }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_BINARY_CONFIG_SLUG || 'binary' }}
-          github-artifact-id: ${{ steps.upload-unsigned-binary.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: cross/target/signed-binary
-
-      - name: 서명된 윈도우 실행 파일 반영
-        if: matrix.key == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
-        shell: pwsh
-        run: |
-          $signed = Get-ChildItem -Path "target/signed-binary" -Filter "wifilock.exe" -Recurse -File | Select-Object -First 1
-          if (-not $signed) { Write-Error "서명된 wifilock.exe 를 찾지 못했습니다"; exit 1 }
-          Copy-Item -Force $signed.FullName "target/release/wifilock.exe"
-
-      - name: 설치 파일 묶기 (윈도우)
+      - name: Microsoft Store용 MSIX 패키지 빌드 (윈도우)
         if: matrix.key == 'windows'
-        run: npx tauri bundle --bundles nsis,msi --no-binary-patching
-
-      - name: 미서명 윈도우 설치 파일 정리 (SignPath 2차 서명용)
-        if: matrix.key == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
         shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "target/unsigned-installers" | Out-Null
-          Get-ChildItem -Path "target/release/bundle" -Include "*-setup.exe","*.msi" -Recurse -File | ForEach-Object {
-            Copy-Item -Force $_.FullName "target/unsigned-installers/$($_.Name)"
-          }
-
-      - name: 미서명 윈도우 설치 파일 업로드 (SignPath 2차 서명용)
-        if: matrix.key == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
-        id: upload-unsigned-installers
-        uses: actions/upload-artifact@v4
-        with:
-          name: unsigned-windows-installers
-          path: cross/target/unsigned-installers/*
-          if-no-files-found: error
-
-      - name: SignPath 코드 서명 요청 (윈도우 설치 파일)
-        if: matrix.key == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
-        uses: signpath/github-action-submit-signing-request@v3
-        with:
-          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
-          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
-          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'wifilock' }}
-          signing-policy-slug: ${{ vars.SIGNPATH_POLICY_SLUG || 'release-signing' }}
-          artifact-configuration-slug: ${{ vars.SIGNPATH_INSTALLERS_CONFIG_SLUG || 'installers' }}
-          github-artifact-id: ${{ steps.upload-unsigned-installers.outputs.artifact-id }}
-          wait-for-completion: true
-          output-artifact-directory: cross/target/signed-installers
-
-      - name: 서명된 윈도우 설치 파일 반영 및 서명 검증
-        if: matrix.key == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
-        shell: pwsh
-        run: |
-          Get-ChildItem -Path "target/signed-installers" -Filter "*-setup.exe" -Recurse -File | ForEach-Object {
-            Copy-Item -Force $_.FullName "target/release/bundle/nsis/$($_.Name)"
-          }
-          Get-ChildItem -Path "target/signed-installers" -Filter "*.msi" -Recurse -File | ForEach-Object {
-            Copy-Item -Force $_.FullName "target/release/bundle/msi/$($_.Name)"
-          }
-          $files = @(Get-Item "target/release/wifilock.exe") + @(Get-ChildItem -Path "target/release/bundle" -Include "*-setup.exe","*.msi" -Recurse -File)
-          foreach ($f in $files) {
-            $sig = Get-AuthenticodeSignature $f.FullName
-            Write-Host "$($f.Name): $($sig.Status) ($($sig.SignerCertificate.Subject))"
-            if ($sig.Status -ne 'Valid') {
-              Write-Error "서명이 유효하지 않습니다: $($f.FullName)"
-              exit 1
-            }
-          }
+        env:
+          MSIX_IDENTITY_NAME: ${{ vars.MSIX_IDENTITY_NAME }}
+          MSIX_PUBLISHER: ${{ vars.MSIX_PUBLISHER }}
+          MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.MSIX_PUBLISHER_DISPLAY_NAME }}
+          MSIX_DISPLAY_NAME: ${{ vars.MSIX_DISPLAY_NAME }}
+          MSIX_SHORT_NAME: ${{ vars.MSIX_SHORT_NAME }}
+        run: ./scripts/build-msix.ps1
 
       - name: 설치 파일 확인값 (SHA-256)
         if: always()
         shell: bash
         run: |
           mkdir -p ../out
-          find target -path '*/release/bundle/*' -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -exec cp {} ../out/ \;
+          find target -path '*/release/bundle/*' -type f \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' -o -name '*.msix' -o -name '*.deb' -o -name '*.rpm' -o -name '*.AppImage' \) -exec cp {} ../out/ \;
           cd ../out && (sha256sum * 2>/dev/null || shasum -a 256 *) | tee SHA256SUMS-${{ matrix.key }}.txt
 
       - uses: actions/upload-artifact@v4

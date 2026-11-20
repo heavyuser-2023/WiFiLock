@@ -366,12 +366,22 @@ fn location_info(os: &str, status: LocationStatus, snap: &WiFiSnapshot) -> Locat
         }
         ("windows", true) => (
             "위치 권한이 꺼져 있어 와이파이 이름을 읽을 수 없습니다".to_string(),
-            "윈도우 11 24H2 부터는 위치 권한을 허용한 앱만 와이파이 이름을 읽을 수 있습니다. 설정 > 개인 정보 및 보안 > 위치에서 '위치 서비스'와 '데스크톱 앱이 위치에 액세스하도록 허용'을 켜 주세요. 그 전에는 공유기 주소로 네트워크를 구분합니다.".to_string(),
+            if wifilock_platform::is_packaged() {
+                "윈도우 11 24H2 부터는 위치 권한을 허용한 앱만 와이파이 이름을 읽을 수 있습니다. 설정 > 개인 정보 및 보안 > 위치에서 '위치 서비스'와 '앱이 위치에 액세스하도록 허용'에서 WiFiLock을 켜 주세요. 그 전에는 공유기 주소로 네트워크를 구분합니다."
+            } else {
+                "윈도우 11 24H2 부터는 위치 권한을 허용한 앱만 와이파이 이름을 읽을 수 있습니다. 설정 > 개인 정보 및 보안 > 위치에서 '위치 서비스'와 '데스크톱 앱이 위치에 액세스하도록 허용'을 켜 주세요. 그 전에는 공유기 주소로 네트워크를 구분합니다."
+            }
+            .to_string(),
             "위치 설정 열기".to_string(),
         ),
         ("windows", false) => (
             "Location permission is off; cannot read Wi-Fi name".to_string(),
-            "Starting with Windows 11 24H2, apps need Location permission to read Wi-Fi names. Turn on 'Location services' and 'Let desktop apps access your location' under Settings > Privacy & security > Location. Until then, networks are identified by router MAC address.".to_string(),
+            if wifilock_platform::is_packaged() {
+                "Starting with Windows 11 24H2, apps need Location permission to read Wi-Fi names. Turn on 'Location services' and allow WiFiLock under 'Let apps access your location' in Settings > Privacy & security > Location. Until then, networks are identified by router MAC address."
+            } else {
+                "Starting with Windows 11 24H2, apps need Location permission to read Wi-Fi names. Turn on 'Location services' and 'Let desktop apps access your location' under Settings > Privacy & security > Location. Until then, networks are identified by router MAC address."
+            }
+            .to_string(),
             "Open Location Settings".to_string(),
         ),
         _ => (String::new(), String::new(), String::new()),

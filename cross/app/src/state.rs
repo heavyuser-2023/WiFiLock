@@ -42,6 +42,7 @@ pub struct AppState {
     pub hud_remaining: Mutex<Option<i64>>,
     /// 설정 창이 열리며 보낸 화면 정보 (자가 진단 확인용)
     pub page_report: Mutex<Option<serde_json::Value>>,
+    pub autostart: AtomicBool,
     pub autostart_error: Mutex<Option<String>>,
     /// 판단 스레드에 "지금 한 번 돌아라" 신호 (판단은 판단 스레드 한 곳에서만 돈다)
     pub wake: (Mutex<bool>, Condvar),
@@ -74,6 +75,7 @@ impl AppState {
             menu: Mutex::new(None),
             hud_remaining: Mutex::new(None),
             page_report: Mutex::new(None),
+            autostart: AtomicBool::new(false),
             autostart_error: Mutex::new(None),
             wake: (Mutex::new(false), Condvar::new()),
             locking: AtomicBool::new(false),
