@@ -204,4 +204,13 @@ fn timeouts_longer_than_system_lock() {
     let rule = NetworkRule::new("Home", Some("Home_5G"), Some("d8:07:b6:47:6b:8c"), 1800);
     assert_eq!(rule.identifier_text_in(Lang::Ko), "와이파이 이름: Home_5G · 공유기: d8:07:b6:47:6b:8c");
     assert_eq!(rule.identifier_text_in(Lang::En), "Wi-Fi Name: Home_5G · Router: d8:07:b6:47:6b:8c");
+
+    store.update(|s| {
+        s.unknown_wifi_timeout_seconds = 600;
+        s.no_wifi_timeout_seconds = 600;
+    });
+    let merged = store.settings();
+    assert_eq!(merged.timeouts_longer_than_in(Lang::Ko, 120).len(), 4);
+    assert_eq!(merged.timeouts_longer_than_in(Lang::Ko, 120)[3], ("기본 잠금 시간".to_string(), 600));
+    assert_eq!(merged.timeouts_longer_than_in(Lang::En, 120)[3], ("Default timeout".to_string(), 600));
 }

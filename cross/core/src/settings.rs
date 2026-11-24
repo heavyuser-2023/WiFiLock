@@ -1,6 +1,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 use uuid::Uuid;
 
+use crate::bluetooth::{BluetoothDeviceRule, ProximityRange};
 use crate::i18n::{self, Lang};
 
 /// 등록한 네트워크의 기본 잠금 시간 (30분)
@@ -144,6 +145,14 @@ pub struct AppSettings {
     pub show_countdown_in_menu_bar: bool,
     /// 남은 시간을 분 단위로 표시 (마지막 1분만 초 단위). 메뉴 막대를 1분에 한 번만 다시 그려 자원을 덜 쓴다.
     pub countdown_in_minutes: bool,
+    /// 지정한 블루투스 기기가 근처에 있으면 자동 잠금을 보류할지
+    pub bluetooth_hold_enabled: bool,
+    /// 블루투스 근접 감지 거리 프리셋
+    pub bluetooth_range: ProximityRange,
+    /// 사용자 지정 블루투스 진입 RSSI 기준값 (None 이면 프리셋 사용)
+    pub bluetooth_custom_rssi: Option<i16>,
+    /// 잠금 보류 대상으로 등록된 블루투스 기기들
+    pub bluetooth_devices: Vec<BluetoothDeviceRule>,
 }
 
 impl Default for AppSettings {
@@ -158,11 +167,18 @@ impl Default for AppSettings {
             respect_display_sleep_assertions: true,
             show_countdown_in_menu_bar: false,
             countdown_in_minutes: false,
+            bluetooth_hold_enabled: false,
+            bluetooth_range: ProximityRange::default(),
+            bluetooth_custom_rssi: None,
+            bluetooth_devices: Vec::new(),
         }
     }
 }
 
 impl AppSettings {
+    pub fn effective_bluetooth_rssi(&self) -> (i16, i16) {
+        self.bluetooth_range.thresholds(self.bluetooth_custom_rssi)
+    }
     /// `limit` 초보다 길게(또는 "잠그지 않음"으로) 정한 잠금 시간들: (이름, 초). 위에서부터 규칙, 등록되지 않은 와이파이, 와이파이 없음.
     /// 운영체제가 `limit` 초면 스스로 잠그는 경우, 이 시간들은 실제로는 `limit` 초가 된다.
     pub fn timeouts_longer_than(&self, limit: i64) -> Vec<(String, i64)> {
@@ -173,11 +189,17 @@ impl AppSettings {
         let longer = |t: i64| t <= 0 || t > limit;
         let mut out: Vec<(String, i64)> =
             self.rules.iter().filter(|r| longer(r.timeout_seconds)).map(|r| (r.name.clone(), r.timeout_seconds)).collect();
-        if longer(self.unknown_wifi_timeout_seconds) {
-            out.push((lang.pick("등록되지 않은 와이파이", "Unregistered Wi-Fi").into(), self.unknown_wifi_timeout_seconds));
-        }
-        if longer(self.no_wifi_timeout_seconds) {
-            out.push((lang.pick("와이파이 없음", "No Wi-Fi").into(), self.no_wifi_timeout_seconds));
+        if self.unknown_wifi_timeout_seconds == self.no_wifi_timeout_seconds {
+            if longer(self.unknown_wifi_timeout_seconds) {
+                out.push((lang.pick("기본 잠금 시간", "Default timeout").into(), self.unknown_wifi_timeout_seconds));
+            }
+        } else {
+            if longer(self.unknown_wifi_timeout_seconds) {
+                out.push((lang.pick("등록되지 않은 와이파이", "Unregistered Wi-Fi").into(), self.unknown_wifi_timeout_seconds));
+            }
+            if longer(self.no_wifi_timeout_seconds) {
+                out.push((lang.pick("와이파이 없음", "No Wi-Fi").into(), self.no_wifi_timeout_seconds));
+            }
         }
         out
     }
@@ -199,6 +221,11 @@ impl AppSettings {
                     .unwrap_or_else(|| i18n::pick("네트워크", "Network").into());
             }
         }
+        self.bluetooth_custom_rssi = self.bluetooth_custom_rssi.map(ProximityRange::clamp_custom_rssi);
+        for d in &mut self.bluetooth_devices {
+            d.sanitize();
+        }
+        self.bluetooth_devices.retain(BluetoothDeviceRule::has_any_identifier);
         self
     }
 }
@@ -217,6 +244,21 @@ impl<'de> Deserialize<'de> for AppSettings {
                 .collect(),
             None => def.rules.clone(),
         };
+        let bluetooth_range = v
+            .get("bluetoothRange")
+            .and_then(|x| serde_json::from_value::<ProximityRange>(x.clone()).ok())
+            .unwrap_or(def.bluetooth_range);
+        let bluetooth_custom_rssi = v
+            .get("bluetoothCustomRssi")
+            .and_then(|x| x.as_i64())
+            .and_then(|n| i16::try_from(n).ok());
+        let bluetooth_devices = match v.get("bluetoothDevices").and_then(|x| x.as_array()) {
+            Some(arr) => arr
+                .iter()
+                .filter_map(|d| serde_json::from_value::<BluetoothDeviceRule>(d.clone()).ok())
+                .collect(),
+            None => def.bluetooth_devices.clone(),
+        };
         Ok(AppSettings {
             enabled: b("enabled", def.enabled),
             rules,
@@ -227,6 +269,10 @@ impl<'de> Deserialize<'de> for AppSettings {
             respect_display_sleep_assertions: b("respectDisplaySleepAssertions", def.respect_display_sleep_assertions),
             show_countdown_in_menu_bar: b("showCountdownInMenuBar", def.show_countdown_in_menu_bar),
             countdown_in_minutes: b("countdownInMinutes", def.countdown_in_minutes),
+            bluetooth_hold_enabled: b("bluetoothHoldEnabled", def.bluetooth_hold_enabled),
+            bluetooth_range,
+            bluetooth_custom_rssi,
+            bluetooth_devices,
         }
         .clamped())
     }

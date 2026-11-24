@@ -3,12 +3,17 @@
 //! 화면 반영은 모두 주 스레드에서 한다. 판단 스레드는 반영할 내용만 만들어 주 스레드로 보낸다.
 //! (공유 상태의 잠금을 쥔 채 화면 함수를 부르면 주 스레드와 서로 기다리다 멈출 수 있어서다)
 
+use std::sync::atomic::Ordering;
+
 use serde::Serialize;
 use tauri::image::Image;
 use tauri::{AppHandle, Emitter, Manager};
 use wifilock_core::{format, i18n, Lang};
-use wifilock_core::{AppSettings, EngineState, LockStatus, PolicyResolver, PolicySource, TimeoutPresets, WiFiSnapshot};
-use wifilock_platform::{LocationStatus, SystemLockNote};
+use wifilock_core::{
+    AppSettings, BluetoothDeviceLive, EngineState, LockStatus, PolicyResolver, PolicySource, ProximityRange,
+    TimeoutPresets, WiFiSnapshot,
+};
+use wifilock_platform::{BluetoothStatus, LocationStatus, SystemLockNote};
 
 use crate::menu;
 use crate::state::{lock, state, AppState};
@@ -45,8 +50,10 @@ pub struct UiSnapshot {
     pub network: String,
     pub policy: String,
     pub state: String,
-    /// 잠금 보류 중일 때 화면 유지를 요청한 앱 줄 (아니면 빈 글자)
+    /// 잠금 보류 중일 때 화면 유지를 요청한 앱 또는 근처 블루투스 기기 줄 (아니면 빈 글자)
     pub holders: String,
+    /// 잠금 보류 해제 안내 줄
+    pub held_hint: String,
     pub structure: MenuStructure,
     /// Some 이면 경고 창에 보여 줄 남은 초
     pub hud: Option<i64>,
@@ -113,18 +120,19 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
     let location = *lock(&st.location);
     let snap = &status.snapshot;
 
-    let held = match &status.state {
-        EngineState::HeldByAssertion { holders } => Some(holders.as_slice()),
+    let held_lines = match &status.state {
+        EngineState::HeldByAssertion { holders } => Some((format::held_holders(holders), format::held_hint())),
+        EngineState::HeldByBluetooth { devices } => Some((format::held_bt_devices(devices), format::held_bt_hint())),
         _ => None,
     };
     let icon = match status.state {
         EngineState::Warning { .. } => IconKind::Warning,
-        EngineState::HeldByAssertion { .. } => IconKind::Held,
+        EngineState::HeldByAssertion { .. } | EngineState::HeldByBluetooth { .. } => IconKind::Held,
         ref s if is_active(s) => IconKind::Active,
         _ => IconKind::Inactive,
     };
-    // 보류 중이면 메뉴 첫 줄은 "잠기지 않음"만 쓰고, 앱 이름은 다음 줄에 따로 보인다.
-    let state_text = match held {
+    // 보류 중이면 메뉴 첫 줄은 "잠기지 않음"만 쓰고, 사유는 다음 줄에 따로 보인다.
+    let state_text = match &held_lines {
         Some(_) => format::held_headline(),
         None => format::state_text(&status.state),
     };
@@ -143,7 +151,7 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
     // 윈도우 알림 영역에는 글자를 둘 수 없어 아이콘과 도움말로 알린다.
     let title = if cfg!(any(target_os = "macos", target_os = "linux")) {
         match status.state {
-            EngineState::HeldByAssertion { .. } => Some(format::menu_bar_held()),
+            EngineState::HeldByAssertion { .. } | EngineState::HeldByBluetooth { .. } => Some(format::menu_bar_held()),
             EngineState::Counting { remaining, .. } | EngineState::Warning { remaining } if settings.show_countdown_in_menu_bar => {
                 Some(format::menu_bar_countdown(remaining, settings.countdown_in_minutes))
             }
@@ -177,6 +185,8 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         }
         _ => false,
     };
+    let is_held = held_lines.is_some();
+    let (holders, held_hint) = held_lines.unwrap_or_default();
     UiSnapshot {
         icon,
         tooltip,
@@ -184,12 +194,13 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         network: network_text(snap),
         policy,
         state: state_text,
-        holders: held.map(format::held_holders).unwrap_or_default(),
+        holders,
+        held_hint,
         structure: MenuStructure {
             lang: Some(i18n::current()),
             enabled: settings.enabled,
             paused: status.paused,
-            held: held.is_some(),
+            held: is_held,
             show_permission: snap.is_connected() && !location.has_permission(),
             add_label,
         },
@@ -269,6 +280,9 @@ fn apply(app: &AppHandle, snap: UiSnapshot) {
         if p.map(|p| &p.holders) != Some(&snap.holders) {
             let _ = h.holders.set_text(&snap.holders);
         }
+        if p.map(|p| &p.held_hint) != Some(&snap.held_hint) {
+            let _ = h.held_hint.set_text(&snap.held_hint);
+        }
     }
 
     match snap.hud {
@@ -306,6 +320,37 @@ pub struct Choice {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct BluetoothNotice {
+    pub title: String,
+    pub explanation: String,
+    pub button: String,
+    pub action: &'static str,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeChoice {
+    pub value: &'static str,
+    pub label: &'static str,
+    pub description: &'static str,
+    pub enter_rssi: i16,
+    pub exit_rssi: i16,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BluetoothUiInfo {
+    pub status: BluetoothStatus,
+    pub scanning: bool,
+    pub notice: Option<BluetoothNotice>,
+    pub live: Vec<BluetoothDeviceLive>,
+    pub range_options: Vec<RangeChoice>,
+    pub enter_rssi: i16,
+    pub exit_rssi: i16,
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct UiState {
     pub lang: &'static str,
     pub os: &'static str,
@@ -317,6 +362,7 @@ pub struct UiState {
     pub router_text: Option<String>,
     pub policy_text: String,
     pub state_text: String,
+    pub is_held: bool,
     pub can_add_current: bool,
     pub current_rule_id: Option<String>,
     pub location: LocationInfo,
@@ -330,6 +376,8 @@ pub struct UiState {
     pub holders_note: String,
     /// 운영체제가 이 앱보다 먼저 잠그면 그 안내
     pub system_lock: Option<SystemLockNote>,
+    /// 블루투스 근접 보류 UI 상태
+    pub bluetooth: BluetoothUiInfo,
 }
 
 fn location_info(os: &str, status: LocationStatus, snap: &WiFiSnapshot) -> LocationInfo {
@@ -389,6 +437,60 @@ fn location_info(os: &str, status: LocationStatus, snap: &WiFiSnapshot) -> Locat
     LocationInfo { status, needs_permission: needs, title, explanation, button }
 }
 
+fn bluetooth_notice(status: BluetoothStatus, relevant: bool, lang: Lang) -> Option<BluetoothNotice> {
+    if !relevant {
+        return None;
+    }
+    let ko = lang == Lang::Ko;
+    match status {
+        BluetoothStatus::Ready => None,
+        BluetoothStatus::NotDetermined => Some(BluetoothNotice {
+            title: if ko { "블루투스 권한이 필요합니다" } else { "Bluetooth permission required" }.into(),
+            explanation: if ko {
+                "지정한 기기가 근처에 있는지 확인하려면 블루투스 권한을 허용해 주세요. 주변 기기 정보는 저장하거나 밖으로 보내지 않습니다."
+            } else {
+                "Allow Bluetooth access to detect nearby trusted devices. Device data is never stored or sent anywhere."
+            }
+            .into(),
+            button: if ko { "블루투스 권한 요청" } else { "Request Permission" }.into(),
+            action: "permission",
+        }),
+        BluetoothStatus::Unauthorized => Some(BluetoothNotice {
+            title: if ko { "블루투스 권한이 거절되어 있습니다" } else { "Bluetooth permission denied" }.into(),
+            explanation: if ko {
+                "시스템 설정의 개인정보 보호 및 보안 > 블루투스에서 WiFiLock을 허용해 주세요."
+            } else {
+                "Please allow WiFiLock under System Settings > Privacy & Security > Bluetooth."
+            }
+            .into(),
+            button: if ko { "시스템 설정에서 허용하기" } else { "Allow in System Settings" }.into(),
+            action: "settings",
+        }),
+        BluetoothStatus::PoweredOff => Some(BluetoothNotice {
+            title: if ko { "블루투스가 꺼져 있습니다" } else { "Bluetooth is turned off" }.into(),
+            explanation: if ko {
+                "블루투스가 꺼져 있어 주변 기기를 감지할 수 없습니다."
+            } else {
+                "Bluetooth is turned off, so nearby devices cannot be detected."
+            }
+            .into(),
+            button: if ko { "블루투스 설정 열기" } else { "Open Bluetooth Settings" }.into(),
+            action: "settings",
+        }),
+        BluetoothStatus::Unavailable => Some(BluetoothNotice {
+            title: if ko { "사용 가능한 블루투스 장치가 없습니다" } else { "No Bluetooth adapter available" }.into(),
+            explanation: if ko {
+                "이 컴퓨터에서 블루투스 어댑터를 찾지 못했습니다."
+            } else {
+                "Could not find a Bluetooth adapter on this computer."
+            }
+            .into(),
+            button: String::new(),
+            action: "",
+        }),
+    }
+}
+
 pub fn ui_state(app: &AppHandle) -> UiState {
     let st = state(app);
     let status = lock(&st.controller).status().clone();
@@ -438,6 +540,36 @@ pub fn ui_state(app: &AppHandle) -> UiState {
     };
     let system_lock = wifilock_platform::autolock::note(os_name, &lock(&st.system_locks).1, &settings);
 
+    let lang = i18n::current();
+    let bt_status = *lock(&st.bt_status);
+    let bt_scanning = st.bt_radar_active.load(Ordering::Relaxed);
+    let bt_relevant = settings.bluetooth_hold_enabled || !settings.bluetooth_devices.is_empty() || bt_scanning;
+    let (enter_rssi, exit_rssi) = settings.effective_bluetooth_rssi();
+    let range_options = ProximityRange::ALL
+        .iter()
+        .map(|r| RangeChoice {
+            value: r.as_str(),
+            label: r.label_in(lang),
+            description: r.description_in(lang),
+            enter_rssi: r.enter_rssi(),
+            exit_rssi: r.exit_rssi(),
+        })
+        .collect();
+    let bluetooth = BluetoothUiInfo {
+        status: bt_status,
+        scanning: bt_scanning,
+        notice: bluetooth_notice(bt_status, bt_relevant, lang),
+        live: status.bt_live.clone(),
+        range_options,
+        enter_rssi,
+        exit_rssi,
+    };
+
+    let is_held = matches!(
+        status.state,
+        EngineState::HeldByAssertion { .. } | EngineState::HeldByBluetooth { .. }
+    );
+
     UiState {
         lang: i18n::code(),
         os,
@@ -454,6 +586,7 @@ pub fn ui_state(app: &AppHandle) -> UiState {
             format!("Current policy: {} · {}", format::timeout(status.policy.timeout_seconds), status.policy.source.korean_description())
         },
         state_text: format::state_text(&status.state),
+        is_held,
         wifi,
         settings,
         autostart,
@@ -464,5 +597,6 @@ pub fn ui_state(app: &AppHandle) -> UiState {
         countdown_supported: cfg!(any(target_os = "macos", target_os = "linux")),
         holders_note,
         system_lock,
+        bluetooth,
     }
 }

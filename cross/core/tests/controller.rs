@@ -53,6 +53,7 @@ impl Sim {
                 screen_locked: self.locked,
                 assertion_holders: self.holders.clone(),
                 wifi: self.wifi.clone(),
+                bluetooth: Vec::new(),
             },
         );
         if r.lock_reason.is_some() {
@@ -302,14 +303,14 @@ fn idle_unavailable_never_locks_but_shows_other_states() {
     s.wifi = WiFiSnapshot::status(WiFiStatus::Disconnected);
     let r = s.c.tick(
         s.store.settings(),
-        SystemInputs { now: s.now, awake: s.awake, wall: s.now, idle_seconds: None, screen_locked: false, assertion_holders: vec![], wifi: s.wifi.clone() },
+        SystemInputs { now: s.now, awake: s.awake, wall: s.now, idle_seconds: None, screen_locked: false, assertion_holders: vec![], wifi: s.wifi.clone(), bluetooth: vec![] },
     );
     assert_eq!(r.output.state, EngineState::IdleUnavailable);
     assert!(r.lock_reason.is_none());
     s.store.update(|st| st.enabled = false);
     let r = s.c.tick(
         s.store.settings(),
-        SystemInputs { now: s.now + 1.0, awake: s.awake + 1.0, wall: s.now + 1.0, idle_seconds: None, screen_locked: false, assertion_holders: vec![], wifi: s.wifi.clone() },
+        SystemInputs { now: s.now + 1.0, awake: s.awake + 1.0, wall: s.now + 1.0, idle_seconds: None, screen_locked: false, assertion_holders: vec![], wifi: s.wifi.clone(), bluetooth: vec![] },
     );
     assert_eq!(r.output.state, EngineState::Disabled);
 }

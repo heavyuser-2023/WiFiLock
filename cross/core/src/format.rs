@@ -150,6 +150,9 @@ pub fn state_text_in(lang: Lang, state: &EngineState) -> String {
             EngineState::HeldByAssertion { holders } => {
                 format!("{} · {}", held_headline_in(lang), held_holders_in(lang, holders))
             }
+            EngineState::HeldByBluetooth { devices } => {
+                format!("{} · {}", held_headline_in(lang), held_bt_devices_in(lang, devices))
+            }
             EngineState::ScreenLocked => "화면 잠김".into(),
             EngineState::Counting { remaining, .. } => format!("잠금까지 {} 남음", countdown(*remaining)),
             EngineState::Warning { remaining } => format!("곧 잠김: {}초", remaining.ceil().max(0.0) as i64),
@@ -164,6 +167,9 @@ pub fn state_text_in(lang: Lang, state: &EngineState) -> String {
             EngineState::NeverLock => "Never auto-lock on this network".into(),
             EngineState::HeldByAssertion { holders } => {
                 format!("{} · {}", held_headline_in(lang), held_holders_in(lang, holders))
+            }
+            EngineState::HeldByBluetooth { devices } => {
+                format!("{} · {}", held_headline_in(lang), held_bt_devices_in(lang, devices))
             }
             EngineState::ScreenLocked => "Screen locked".into(),
             EngineState::Counting { remaining, .. } => format!("Locks in {}", countdown(*remaining)),
@@ -199,23 +205,41 @@ pub fn held_headline_in(lang: Lang) -> String {
     lang.pick("지금은 자동으로 잠기지 않음", "Won't auto-lock right now").into()
 }
 
-/// 메뉴 둘째 줄: 어떤 앱이 화면을 켜 두고 있는지 ("화면 유지 요청: Zoom, VLC 외 1개")
-pub fn held_holders(holders: &[String]) -> String {
-    held_holders_in(i18n::current(), holders)
-}
-
-pub fn held_holders_in(lang: Lang, holders: &[String]) -> String {
-    let mut names = holders.iter().take(HELD_NAMES_SHOWN).map(String::as_str).collect::<Vec<_>>().join(", ");
-    let more = holders.len().saturating_sub(HELD_NAMES_SHOWN);
+fn join_limited_names(lang: Lang, items: &[String]) -> String {
+    let mut names = items.iter().take(HELD_NAMES_SHOWN).map(String::as_str).collect::<Vec<_>>().join(", ");
+    let more = items.len().saturating_sub(HELD_NAMES_SHOWN);
     if more > 0 {
         names.push_str(&match lang {
             Lang::Ko => format!(" 외 {more}개"),
             Lang::En => format!(" +{more} more"),
         });
     }
+    names
+}
+
+/// 메뉴 둘째 줄: 어떤 앱이 화면을 켜 두고 있는지 ("화면 유지 요청: Zoom, VLC 외 1개")
+pub fn held_holders(holders: &[String]) -> String {
+    held_holders_in(i18n::current(), holders)
+}
+
+pub fn held_holders_in(lang: Lang, holders: &[String]) -> String {
+    let names = join_limited_names(lang, holders);
     match lang {
         Lang::Ko => format!("화면 유지 요청: {names}"),
         Lang::En => format!("Keeping screen awake: {names}"),
+    }
+}
+
+/// 메뉴 둘째 줄: 어떤 블루투스 기기가 근처에 있어 보류 중인지 ("근처 기기: …")
+pub fn held_bt_devices(devices: &[String]) -> String {
+    held_bt_devices_in(i18n::current(), devices)
+}
+
+pub fn held_bt_devices_in(lang: Lang, devices: &[String]) -> String {
+    let names = join_limited_names(lang, devices);
+    match lang {
+        Lang::Ko => format!("근처 기기: {names}"),
+        Lang::En => format!("Nearby device: {names}"),
     }
 }
 
@@ -226,6 +250,16 @@ pub fn held_hint() -> String {
 
 pub fn held_hint_in(lang: Lang) -> String {
     lang.pick("요청이 끝나면 자동 잠금이 다시 동작합니다", "Auto-lock resumes when the request ends").into()
+}
+
+/// 블루투스 보류 시 메뉴 셋째 줄: 언제 다시 잠그는지
+pub fn held_bt_hint() -> String {
+    held_bt_hint_in(i18n::current())
+}
+
+pub fn held_bt_hint_in(lang: Lang) -> String {
+    lang.pick("기기가 범위를 벗어나면 자동 잠금이 다시 동작합니다", "Auto-lock resumes when the device moves out of range")
+        .into()
 }
 
 #[cfg(test)]

@@ -25,8 +25,8 @@ pub fn open_settings(app: &AppHandle) {
     let url = format!("settings.html?lang={}", i18n::code());
     let built = WebviewWindowBuilder::new(app, SETTINGS, WebviewUrl::App(url.into()))
         .title(title)
-        .inner_size(640.0, 820.0)
-        .min_inner_size(520.0, 480.0)
+        .inner_size(680.0, 840.0)
+        .min_inner_size(560.0, 520.0)
         .resizable(true)
         .center()
         .focused(true)
@@ -68,6 +68,14 @@ pub fn request_location(app: &AppHandle) {
         wifilock_platform::prepare_on_main_thread();
         platform.request_location_permission();
     });
+}
+
+/// 블루투스 권한을 요청하거나 시스템 설정을 연다.
+pub fn request_bluetooth(app: &AppHandle) {
+    let st = state(app);
+    let platform = st.platform.clone();
+    activate_app(app);
+    platform.request_bluetooth_permission();
 }
 
 /// 경고 창을 쓰지 않는 동안 이만큼 지나면 닫는다 (웹 화면 보조 프로세스와 메모리를 돌려준다).

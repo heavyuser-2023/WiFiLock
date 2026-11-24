@@ -14,14 +14,14 @@
     <div class="group">
       <label class="row">
         <div class="text">
-          <div class="label">자동 잠금 사용</div>
-          <div class="desc">키보드·마우스 입력이 없으면 아래 시간 뒤에 화면을 잠급니다.</div>
+          <div class="label" id="enabled-label">자동 잠금 사용</div>
+          <div class="desc" id="enabled-desc">키보드·마우스 입력이 없으면 아래 시간 뒤에 화면을 잠급니다.</div>
         </div>
         <input type="checkbox" class="switch" id="enabled">
       </label>
       <label class="row">
         <div class="text">
-          <div class="label">로그인할 때 자동으로 실행</div>
+          <div class="label" id="autostart-label">로그인할 때 자동으로 실행</div>
           <div class="desc error" id="autostart-error" hidden></div>
         </div>
         <input type="checkbox" class="switch" id="autostart">
@@ -30,7 +30,7 @@
   </section>
 
   <section id="sec-current">
-    <h2>현재 네트워크</h2>
+    <h2>현재 상태</h2>
     <div class="group">
       <div class="row current">
         <div class="wifi-icon" id="wifi-icon" aria-hidden="true"></div>
@@ -83,50 +83,175 @@
         <button id="add-commit" class="primary">추가</button>
       </div>
     </div>
-    <p class="footer">위에 있는 규칙부터 적용됩니다. 공유기 주소까지 기록된 규칙은 이름이 같아도 공유기가 다르면 적용하지 않습니다. 이름으로만 추가한 규칙은 같은 이름의 모든 와이파이에 적용됩니다.</p>
-  </section>
-
-  <section id="sec-defaults">
-    <h2>기본 잠금 시간</h2>
-    <div class="group">
+    <div class="group default-rule-group">
       <label class="row">
-        <div class="label">등록되지 않은 와이파이</div>
+        <div class="text">
+          <div class="label" id="default-rule-label">그 밖의 와이파이 · 연결 안 됨</div>
+          <div class="desc" id="default-rule-desc">등록하지 않은 와이파이나 연결이 끊긴 상태에 적용됩니다.</div>
+        </div>
         <select id="unknown"></select>
       </label>
+    </div>
+    <p class="footer" id="rules-footer">위에 있는 규칙부터 적용됩니다. 해당 규칙이 없으면 위의 기본 잠금 시간을 따릅니다. 공유기 주소까지 기록된 규칙은 이름이 같아도 공유기가 다르면 적용하지 않습니다.</p>
+  </section>
+
+  <section id="sec-hold">
+    <h2>잠금 보류</h2>
+    <div class="group">
       <label class="row">
-        <div class="label">와이파이 꺼짐 · 연결 안 됨</div>
-        <select id="nowifi"></select>
+        <div class="text">
+          <div class="label" id="bt-enabled-label">블루투스 기기가 근처에 있으면 잠그지 않기</div>
+          <div class="desc" id="bt-enabled-desc">등록된 기기가 선택한 거리 안에 있으면 잠금을 보류합니다.</div>
+        </div>
+        <input type="checkbox" class="switch" id="bt-enabled">
+      </label>
+      <div class="row bt-range-row" id="bt-range-row">
+        <div class="bt-range-head">
+          <label class="label" for="bt-rssi-slider" id="bt-range-label">감지 거리</label>
+          <div class="bt-range-status">
+            <output class="bt-readout-pill" id="bt-rssi-readout" for="bt-rssi-slider">가까움 · -65 dBm</output>
+            <button type="button" class="bt-reset-btn" id="bt-rssi-reset" hidden>가까움으로</button>
+          </div>
+        </div>
+        <div class="desc" id="bt-range-desc"></div>
+        <div class="bt-range-deck">
+          <fieldset class="segmented" id="bt-range">
+            <legend class="sr-only" id="bt-range-legend">감지 거리</legend>
+            <label class="seg-opt">
+              <input type="radio" name="bt-range" value="near" checked>
+              <span id="bt-range-near">가까움 (약 1~2m)</span>
+            </label>
+            <label class="seg-opt">
+              <input type="radio" name="bt-range" value="medium">
+              <span id="bt-range-medium">중간 가까움 (약 3~5m)</span>
+            </label>
+            <label class="seg-opt">
+              <input type="radio" name="bt-range" value="far">
+              <span id="bt-range-far">먼 거리 (약 6~10m)</span>
+            </label>
+          </fieldset>
+          <div class="bt-deck-slider">
+            <div class="bt-slider-wrap">
+              <div class="bt-slider-ticks" aria-hidden="true">
+                <span class="bt-tick" data-preset="near" style="--pos: 40%;"></span>
+                <span class="bt-tick" data-preset="medium" style="--pos: 62%;"></span>
+                <span class="bt-tick" data-preset="far" style="--pos: 86%;"></span>
+              </div>
+              <span class="bt-live-pin" id="bt-live-pin" aria-hidden="true" hidden></span>
+              <input type="range" class="bt-slider" id="bt-rssi-slider" min="45" max="95" step="1" value="65" aria-label="블루투스 근접 감도">
+            </div>
+            <div class="bt-slider-scale" aria-hidden="true">
+              <span id="bt-scale-strict">더 가까이서만 (-45 dBm)</span>
+              <span id="bt-scale-max">더 멀리까지 (-95 dBm)</span>
+            </div>
+          </div>
+          <div class="bt-deck-meta">
+            <span class="bt-live-meta" id="bt-live-meta" hidden>
+              <span class="bt-live-dot" id="bt-live-dot" aria-hidden="true"></span>
+              <span id="bt-live-text"></span>
+            </span>
+            <span class="bt-exit-meta" id="bt-exit-meta"></span>
+          </div>
+        </div>
+      </div>
+      <div class="row notice" id="bt-notice" hidden>
+        <div class="text">
+          <div class="label warn" id="bt-notice-title"></div>
+          <div class="desc" id="bt-notice-expl"></div>
+        </div>
+        <button id="bt-notice-btn" hidden></button>
+      </div>
+    </div>
+
+    <div class="group bt-devices-group" id="bt-devices"></div>
+    <div class="buttons">
+      <button id="bt-radar-toggle" class="primary">주변 기기 레이더로 찾기…</button>
+    </div>
+
+    <div class="group radar-panel" id="bt-radar-panel" hidden>
+      <div class="radar-header">
+        <div class="radar-title-wrap">
+          <span class="radar-dot" id="bt-radar-dot" aria-hidden="true"></span>
+          <span class="label strong" id="bt-radar-title">주변 기기 레이더</span>
+          <span class="radar-meta" id="bt-radar-status">대기 중</span>
+        </div>
+        <div class="radar-actions">
+          <button id="bt-scan-btn">스캔 시작</button>
+          <button id="bt-radar-close">닫기</button>
+        </div>
+      </div>
+
+      <div class="radar-layout">
+        <div class="radar-stage-wrap">
+          <div class="radar-stage" id="bt-radar-stage" data-range="near">
+            <div class="radar-grid" aria-hidden="true">
+              <div class="radar-ring ring-far"></div>
+              <div class="radar-ring ring-medium"></div>
+              <div class="radar-ring ring-near"></div>
+              <div class="radar-axis axis-h"></div>
+              <div class="radar-axis axis-v"></div>
+              <span class="ring-tag tag-near" id="bt-tag-near">2m</span>
+              <span class="ring-tag tag-medium" id="bt-tag-medium">5m</span>
+              <span class="ring-tag tag-far" id="bt-tag-far">10m</span>
+            </div>
+            <div class="radar-zone" id="bt-radar-zone" aria-hidden="true"></div>
+            <div class="radar-sweep" id="bt-radar-sweep" aria-hidden="true"></div>
+            <div class="radar-center" id="bt-radar-center" aria-hidden="true"></div>
+            <div class="radar-blips" id="bt-radar-blips"></div>
+          </div>
+          <div class="radar-legend" aria-hidden="true">
+            <span><i class="leg-dot is-reg"></i><em id="bt-leg-reg">등록됨</em></span>
+            <span><i class="leg-dot is-in"></i><em id="bt-leg-in">범위 안</em></span>
+            <span><i class="leg-dot is-out"></i><em id="bt-leg-out">범위 밖</em></span>
+          </div>
+        </div>
+
+        <div class="radar-sidebar">
+          <div class="radar-list-head">
+            <span id="bt-radar-list-title">발견된 기기</span>
+            <span class="radar-count" id="bt-radar-count">0</span>
+          </div>
+          <div class="radar-list" id="bt-radar-list"></div>
+          <label class="radar-filter">
+            <input type="checkbox" id="bt-show-unnamed">
+            <span id="bt-unnamed-label">이름 없는 기기 포함 (0개 숨김)</span>
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <div class="group hold-app-group">
+      <label class="row">
+        <div class="text">
+          <div class="label" id="respect-label">동영상 재생 중에는 잠그지 않기</div>
+          <div class="desc" id="respect-desc">앱이 화면을 켜 두도록 요청한 동안(동영상, 발표, 화상 회의 등)은 잠금을 미룹니다.</div>
+          <div class="desc" id="holders-note" hidden></div>
+        </div>
+        <input type="checkbox" class="switch" id="respect">
       </label>
     </div>
-    <p class="footer">등록되지 않은 곳에서는 짧게 두면 노트북을 두고 자리를 비웠을 때 더 안전합니다.</p>
+
+    <p class="footer" id="hold-footer">등록된 블루투스 기기가 근처에 있거나 화면 유지 요청이 있는 동안에는 위의 네트워크 잠금 시간에 도달해도 잠금을 보류합니다. 운영체제 자체 잠금은 따로 동작합니다.</p>
   </section>
 
   <section id="sec-advanced">
     <h2>고급</h2>
     <div class="group">
       <label class="row">
-        <div class="label">잠그기 전에 화면에 경고 표시</div>
+        <div class="label" id="warn-label">잠그기 전에 화면에 경고 표시</div>
         <input type="checkbox" class="switch" id="warn">
       </label>
-      <label class="row">
+      <label class="row" id="warning-row">
         <div class="text">
-          <div class="label">경고 표시 시간</div>
-          <div class="desc">잠금 시간이 짧으면 경고는 잠금 시간의 절반까지만 표시됩니다. 경고 중에 마우스나 키보드를 움직이면 취소됩니다.</div>
+          <div class="label" id="warning-label">경고 표시 시간</div>
+          <div class="desc" id="warning-desc">잠금 시간이 짧으면 경고는 잠금 시간의 절반까지만 표시됩니다. 경고 중에 마우스나 키보드를 움직이면 취소됩니다.</div>
         </div>
         <select id="warning"></select>
       </label>
-      <label class="row">
-        <div class="text">
-          <div class="label">동영상 재생 중에는 잠그지 않기</div>
-          <div class="desc">앱이 화면을 켜 두도록 요청한 동안(동영상, 발표, 화상 회의 등)은 잠금을 미룹니다.</div>
-          <div class="desc" id="holders-note" hidden></div>
-        </div>
-        <input type="checkbox" class="switch" id="respect">
-      </label>
       <label class="row" id="countdown-row">
         <div class="text">
-          <div class="label">메뉴 막대에 남은 시간 표시</div>
-          <div class="desc">분 단위는 남은 시간이 1분에 한 번만 바뀌고 마지막 1분만 초 단위로 세어, 매 초 바뀌는 초 단위보다 컴퓨터 자원을 덜 씁니다.</div>
+          <div class="label" id="countdown-label">메뉴 막대에 남은 시간 표시</div>
+          <div class="desc" id="countdown-desc">분 단위는 남은 시간이 1분에 한 번만 바뀌고 마지막 1분만 초 단위로 세어, 매 초 바뀌는 초 단위보다 컴퓨터 자원을 덜 씁니다.</div>
         </div>
         <select id="countdown"></select>
       </label>

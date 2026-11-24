@@ -1,10 +1,13 @@
 //! 설정 창·경고 창에서 부르는 명령
 
+use std::sync::atomic::Ordering;
+
 use tauri::AppHandle;
 use uuid::Uuid;
-use wifilock_core::{i18n, AppSettings};
+use wifilock_core::{i18n, AppSettings, BluetoothDeviceRule};
+use wifilock_platform::BluetoothStatus;
 
-use crate::engine;
+use crate::engine::{self, RadarSnapshot};
 use crate::logging;
 use crate::state::{lock, state};
 use crate::ui::{self, UiState};
@@ -14,6 +17,7 @@ use crate::views;
 /// (판단 결과는 곧이어 "state" 알림으로 설정 창에 간다)
 /// 명령은 모두 비동기로 두어 주 스레드가 아닌 곳에서 돈다.
 fn after_change(app: &AppHandle) -> UiState {
+    engine::sync_bluetooth_mode(app, &state(app));
     engine::tick_soon(app);
     ui::ui_state(app)
 }
@@ -22,6 +26,7 @@ fn after_change(app: &AppHandle) -> UiState {
 pub async fn get_state(app: AppHandle) -> UiState {
     let st = state(&app);
     engine::refresh_location(&st);
+    engine::refresh_bluetooth_status(&st);
     crate::refresh_autostart(&app);
     // 설정 창을 열 때마다 운영체제 자체 잠금 설정을 새로 읽는다 (그사이 시스템 설정을 바꿨을 수 있다)
     engine::refresh_system_locks(&st, true);
@@ -115,4 +120,73 @@ pub fn hud_state(app: AppHandle) -> Option<i64> {
 #[tauri::command]
 pub fn page_report(app: AppHandle, report: serde_json::Value) {
     *lock(&state(&app).page_report) = Some(report);
+}
+
+#[tauri::command]
+pub async fn bt_start_scan(app: AppHandle) -> RadarSnapshot {
+    let st = state(&app);
+    engine::refresh_bluetooth_status(&st);
+    if *lock(&st.bt_status) == BluetoothStatus::NotDetermined {
+        views::request_bluetooth(&app);
+    }
+    st.bt_radar_active.store(true, Ordering::SeqCst);
+    engine::sync_bluetooth_mode(&app, &st);
+    engine::tick_soon(&app);
+    engine::radar_snapshot(&st)
+}
+
+#[tauri::command]
+pub async fn bt_stop_scan(app: AppHandle) -> RadarSnapshot {
+    let st = state(&app);
+    st.bt_radar_active.store(false, Ordering::SeqCst);
+    engine::sync_bluetooth_mode(&app, &st);
+    engine::tick_soon(&app);
+    engine::radar_snapshot(&st)
+}
+
+#[tauri::command]
+pub async fn bt_get_radar(app: AppHandle) -> RadarSnapshot {
+    let st = state(&app);
+    engine::refresh_bluetooth_status(&st);
+    engine::radar_snapshot(&st)
+}
+
+#[tauri::command]
+pub async fn bt_add_device(app: AppHandle, device: serde_json::Value) -> Result<UiState, String> {
+    let parsed: BluetoothDeviceRule = serde_json::from_value(device).map_err(|e| {
+        if i18n::is_ko() {
+            format!("블루투스 기기 정보 오류: {e}")
+        } else {
+            format!("Invalid Bluetooth device: {e}")
+        }
+    })?;
+    let st = state(&app);
+    let added = lock(&st.store).add_bluetooth_device(parsed).ok_or_else(|| {
+        i18n::pick("블루투스 기기를 식별할 수 없습니다.", "Cannot identify Bluetooth device.").to_string()
+    })?;
+    logging::info(format!("블루투스 기기 등록: {}", added.name));
+    Ok(after_change(&app))
+}
+
+#[tauri::command]
+pub async fn bt_remove_device(app: AppHandle, id: String) -> UiState {
+    if let Ok(id) = Uuid::parse_str(&id) {
+        if lock(&state(&app).store).remove_bluetooth_device(id) {
+            logging::info(format!("블루투스 기기 삭제: {id}"));
+        }
+    }
+    after_change(&app)
+}
+
+#[tauri::command]
+pub async fn bt_request_permission(app: AppHandle) -> UiState {
+    views::request_bluetooth(&app);
+    let st = state(&app);
+    engine::refresh_bluetooth_status(&st);
+    after_change(&app)
+}
+
+#[tauri::command]
+pub async fn bt_open_settings(app: AppHandle) {
+    state(&app).platform.open_bluetooth_settings();
 }

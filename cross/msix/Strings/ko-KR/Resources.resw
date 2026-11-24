@@ -13,6 +13,6 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <data name="AppDescription" xml:space="preserve">
-    <value>연결된 와이파이 네트워크에 따라 자동 화면 잠금 시간을 바꿔 줍니다.</value>
+    <value>연결된 와이파이와 가까운 블루투스 기기에 따라 자동 화면 잠금을 똑똑하게 조절합니다.</value>
   </data>
 </root>

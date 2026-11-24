@@ -53,12 +53,13 @@ GitHub 저장소 **Settings > Secrets and variables > Actions > Variables** 탭�
 2. **제출 옵션 — `runFullTrust` 제한된 기능 소명**:
    - **제출 옵션** 또는 추가 정보 입력란에 아래와 같이 입력합니다.
    > **영문 예시:**  
-   > WiFiLock is a Win32/Tauri desktop system-tray utility packaged as MSIX. It requires the `runFullTrust` capability to monitor user idle time (`GetLastInputInfo`), check display sleep assertions (`CallNtPowerInformation`), query the current Wi-Fi connection via the native Windows WLAN API (`WlanQueryInterface`), inspect OS power/screensaver lock policies, and lock the workstation (`LockWorkStation`) on behalf of the user.
+   > WiFiLock is a Win32/Tauri desktop system-tray utility packaged as MSIX. It requires the `runFullTrust` capability along with `location`, `wiFiControl`, and `bluetooth` device capabilities to monitor user idle time (`GetLastInputInfo`), check display sleep assertions (`CallNtPowerInformation`), query the current Wi-Fi connection via the native Windows WLAN API (`WlanQueryInterface`), locally measure proximity to user-selected Bluetooth devices via Windows BLE advertisement watching (`BluetoothLEAdvertisementWatcher`) and paired device queries (`BluetoothFindFirstDevice`), inspect OS power/screensaver lock policies, and lock the workstation (`LockWorkStation`) on behalf of the user. All network and Bluetooth checks remain strictly local in memory with no data collection or network transmission.
 3. **개인정보 처리방침 URL**:
    - 아래 공개 URL을 입력합니다 (제출 전 `main` 브랜치에도 반영되어 있어야 접근 가능합니다).
    - `https://github.com/heavyuser-2023/WiFiLock/blob/main/docs/privacy-policy.md`
 4. **인증 참고 사항 (Certification Notes)**:
-   - 앱 실행 시 작업 표시줄 트레이(알림 영역)에 아이콘으로 상주하며, 트레이 아이콘 클릭 또는 앱 재실행 시 설정 창이 열린다는 점을 간단히 적어 두면 심사가 수월합니다.
+   - 앱 실행 시 작업 표시줄 트레이(알림 영역)에 아이콘으로 상주하며, 트레이 아이콘 클릭 또는 앱 재실행 시 설정 창이 열립니다.
+   - **잠금 보류(블루투스 근접 감지)**: 설정 창 → **잠금 보류**에서 블루투스 보류를 켜고 **주변 기기 레이더로 찾기…**를 누르면 주변 기기를 스캔해 선택할 수 있습니다. 블루투스 라디오가 없는 테스트 VM에서도 기능은 안전하게 비활성/대기 상태로 동작하며 앱 전체 동작에는 영향이 없습니다.
 5. **로컬 PC에서 설치 테스트가 필요한 경우**:
    - 스토어 업로드 전 Windows PC에서 직접 설치해 보려면 PowerShell에서 `-SelfSign` 옵션으로 빌드할 수 있습니다.
      ```powershell
@@ -74,3 +75,4 @@ GitHub 저장소 **Settings > Secrets and variables > Actions > Variables** 탭�
 
 - **로그인 시 자동 실행**: 일반 설치(`.exe`/`.msi`)는 레지스트리(`tauri-plugin-autostart`)를 사용하지만, MSIX 패키지에서는 레지스트리가 가상화되므로 `AppxManifest.xml`에 선언된 `windows.startupTask`(`TaskId="WiFiLockStartup"`) 및 WinRT `Windows.ApplicationModel.StartupTask` API로 동작합니다.
 - **와이파이 이름 읽기 (Windows 11 24H2 이상)**: 매니페스트에 `<DeviceCapability Name="location" />`과 `<DeviceCapability Name="wiFiControl" />`이 선언되어 있으며, 앱은 **설정 > 개인 정보 및 보안 > 위치**의 일반 앱 허용 흐름에 맞게 안내합니다.
+- **블루투스 근접 보류**: 매니페스트에 `<DeviceCapability Name="bluetooth" />`가 선언되어 있으며, 사용자가 등록한 BLE/페어링 기기의 근접 거리를 로컬에서만 측정합니다.

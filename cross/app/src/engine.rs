@@ -3,8 +3,10 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use tauri::{AppHandle, Manager};
-use wifilock_core::{EngineState, LockScheduler, SystemInputs, TickResult};
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager};
+use wifilock_core::{BluetoothDeviceKind, EngineState, LockScheduler, SystemInputs, TickResult};
+use wifilock_platform::{BluetoothScanMode, BluetoothStatus};
 
 use crate::logging;
 use crate::state::{lock, state, AppState};
@@ -21,6 +23,34 @@ const LOCATION_EVERY_PENDING: Duration = Duration::from_secs(5);
 const HOLDERS_EVERY: Duration = Duration::from_secs(5);
 /// 운영체제가 스스로 잠그는 설정을 다시 읽는 간격 (설정 창이 열려 있는 동안만 읽는다)
 const SYSTEM_LOCK_EVERY: Duration = Duration::from_secs(30);
+const BT_STATUS_EVERY: Duration = Duration::from_secs(5);
+const RADAR_EVERY: Duration = Duration::from_millis(500);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadarDevice {
+    pub key: String,
+    pub name: String,
+    pub kind: BluetoothDeviceKind,
+    pub ble_id: Option<String>,
+    pub mac_address: Option<String>,
+    pub classic_address: Option<String>,
+    pub rssi: Option<i16>,
+    pub connected: bool,
+    pub paired: bool,
+    pub registered_id: Option<String>,
+    pub last_seen_ago: f64,
+    pub in_range: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadarSnapshot {
+    pub status: BluetoothStatus,
+    pub scanning: bool,
+    pub now: f64,
+    pub devices: Vec<RadarDevice>,
+}
 
 /// 잠금이 가까운지 (경고 시작 10초 전부터). 이때는 화면 유지 요청을 매 초 확인하고 경고 창을 미리 준비한다.
 pub fn near_lock(st: &AppState) -> bool {
@@ -40,32 +70,52 @@ pub fn start(app: AppHandle) {
         .spawn(move || {
             let mut last_kind = String::new();
             let mut forced = true;
+            let mut last_tick: Option<Instant> = None;
             let mut last_wifi: Option<Instant> = None;
             let mut last_location: Option<Instant> = None;
+            let mut last_bt_status: Option<Instant> = None;
+            let mut last_radar: Option<Instant> = None;
             loop {
                 let started = Instant::now();
                 let st = state(&app);
+                let radar = st.bt_radar_active.load(Ordering::SeqCst) && app.get_webview_window(views::SETTINGS).is_some();
+
                 if !st.manual.load(Ordering::SeqCst) {
-                    if forced || last_wifi.is_none_or(|t| t.elapsed() >= WIFI_EVERY) {
-                        refresh_wifi(&st);
-                        last_wifi = Some(Instant::now());
+                    let tick_due = forced || last_tick.is_none_or(|t| t.elapsed() >= Duration::from_millis(950));
+                    if tick_due {
+                        if forced || last_wifi.is_none_or(|t| t.elapsed() >= WIFI_EVERY) {
+                            refresh_wifi(&st);
+                            last_wifi = Some(Instant::now());
+                        }
+                        let every = if lock(&st.location).has_permission() { LOCATION_EVERY_GRANTED } else { LOCATION_EVERY_PENDING };
+                        if forced || last_location.is_none_or(|t| t.elapsed() >= every) {
+                            refresh_location(&st);
+                            last_location = Some(Instant::now());
+                        }
+                        let bt_every = if radar { Duration::from_secs(1) } else { BT_STATUS_EVERY };
+                        if forced || last_bt_status.is_none_or(|t| t.elapsed() >= bt_every) {
+                            refresh_bluetooth_status(&st);
+                            last_bt_status = Some(Instant::now());
+                        }
+                        sync_bluetooth_mode(&app, &st);
+                        if app.get_webview_window(views::SETTINGS).is_some() {
+                            refresh_system_locks(&st, false);
+                        }
+                        let r = tick(&app);
+                        last_tick = Some(Instant::now());
+                        let kind = state_kind(&r.output.state);
+                        if kind != last_kind {
+                            logging::info(format!("상태: {}", wifilock_core::format::state_text(&r.output.state)));
+                            last_kind = kind;
+                        }
                     }
-                    let every = if lock(&st.location).has_permission() { LOCATION_EVERY_GRANTED } else { LOCATION_EVERY_PENDING };
-                    if forced || last_location.is_none_or(|t| t.elapsed() >= every) {
-                        refresh_location(&st);
-                        last_location = Some(Instant::now());
-                    }
-                    if app.get_webview_window(views::SETTINGS).is_some() {
-                        refresh_system_locks(&st, false);
-                    }
-                    let r = tick(&app);
-                    let kind = state_kind(&r.output.state);
-                    if kind != last_kind {
-                        logging::info(format!("상태: {}", wifilock_core::format::state_text(&r.output.state)));
-                        last_kind = kind;
+                    if radar && last_radar.is_none_or(|t| t.elapsed() >= RADAR_EVERY) {
+                        emit_radar(&app);
+                        last_radar = Some(Instant::now());
                     }
                 }
-                forced = wait_next(&st, started + Duration::from_millis(1000));
+                let step = if radar { RADAR_EVERY } else { Duration::from_millis(1000) };
+                forced = wait_next(&st, started + step);
             }
         })
         .expect("판단 스레드 시작");
@@ -131,6 +181,140 @@ pub fn refresh_location(st: &AppState) {
     *lock(&st.location) = s;
 }
 
+pub fn refresh_bluetooth_status(st: &AppState) {
+    let s = st.platform.bluetooth_status();
+    *lock(&st.bt_status) = s;
+}
+
+/// 현재 설정·상태에 맞춰 블루투스 스캔 강도(Off / Background / Radar)를 동기화한다.
+pub fn sync_bluetooth_mode(app: &AppHandle, st: &AppState) {
+    if app.get_webview_window(views::SETTINGS).is_none() {
+        st.bt_radar_active.store(false, Ordering::SeqCst);
+    }
+    let radar = st.bt_radar_active.load(Ordering::SeqCst);
+    let want = if lock(&st.fake).is_some() {
+        BluetoothScanMode::Off
+    } else if radar {
+        BluetoothScanMode::Radar
+    } else {
+        let settings = lock(&st.store).settings().clone();
+        let ctrl_state = lock(&st.controller).status().state.clone();
+        let active = settings.bluetooth_hold_enabled
+            && !settings.bluetooth_devices.is_empty()
+            && settings.enabled
+            && !matches!(
+                ctrl_state,
+                EngineState::ScreenLocked | EngineState::Disabled | EngineState::Paused { .. }
+            );
+        if active {
+            BluetoothScanMode::Background
+        } else {
+            BluetoothScanMode::Off
+        }
+    };
+
+    let mut last = lock(&st.bt_last_mode);
+    if *last != want {
+        *last = want;
+        drop(last);
+        st.platform.set_bluetooth_mode(want);
+    }
+}
+
+pub fn radar_snapshot(st: &AppState) -> RadarSnapshot {
+    let fake_obs = lock(&st.bt_fake_radar).clone();
+    let is_fake = fake_obs.is_some();
+    let (obs_list, now, status) = match fake_obs {
+        Some(list) => {
+            let max_seen = list.iter().map(|o| o.seen_at).fold(0.0_f64, f64::max);
+            (list, max_seen.max(logic_now(st)), BluetoothStatus::Ready)
+        }
+        None => (
+            st.platform.bluetooth_observations(),
+            wifilock_platform::clocks().total,
+            *lock(&st.bt_status),
+        ),
+    };
+    let settings = lock(&st.store).settings().clone();
+    let live_map: std::collections::HashMap<String, bool> = if settings.bluetooth_hold_enabled && !is_fake {
+        lock(&st.controller)
+            .status()
+            .bt_live
+            .iter()
+            .map(|l| (l.rule_id.to_string(), l.in_range || l.holding))
+            .collect()
+    } else {
+        std::collections::HashMap::new()
+    };
+    let (enter, exit) = settings.effective_bluetooth_rssi();
+    let scanning = st.bt_radar_active.load(Ordering::SeqCst);
+
+    let mut devices: Vec<RadarDevice> = obs_list
+        .into_iter()
+        .filter_map(|o| {
+            let age = (now - o.seen_at).max(0.0);
+            if age > 30.0 && !o.paired && !o.connected {
+                return None;
+            }
+            let registered_id = settings
+                .bluetooth_devices
+                .iter()
+                .find(|r| r.matches(&o))
+                .map(|r| r.id.to_string());
+            let in_range = registered_id
+                .as_deref()
+                .and_then(|id| live_map.get(id).copied())
+                .unwrap_or_else(|| {
+                    if o.connected {
+                        o.rssi.is_none_or(|r| r > exit)
+                    } else {
+                        o.rssi.is_some_and(|r| r >= enter)
+                    }
+                });
+            Some(RadarDevice {
+                key: o.key,
+                name: o.name.unwrap_or_default(),
+                kind: o.kind,
+                ble_id: o.ble_id,
+                mac_address: o.mac_address,
+                classic_address: o.classic_address,
+                rssi: o.rssi,
+                connected: o.connected,
+                paired: o.paired,
+                registered_id,
+                last_seen_ago: age,
+                in_range,
+            })
+        })
+        .collect();
+
+    devices.sort_by(|a, b| {
+        let a_named = !a.name.is_empty() || a.paired || a.registered_id.is_some();
+        let b_named = !b.name.is_empty() || b.paired || b.registered_id.is_some();
+        let a_score = a.rssi.unwrap_or(if a.connected { -55 } else { -120 });
+        let b_score = b.rssi.unwrap_or(if b.connected { -55 } else { -120 });
+        b_named
+            .cmp(&a_named)
+            .then_with(|| b.registered_id.is_some().cmp(&a.registered_id.is_some()))
+            .then_with(|| b_score.cmp(&a_score))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    RadarSnapshot {
+        status,
+        scanning,
+        now,
+        devices,
+    }
+}
+
+pub fn emit_radar(app: &AppHandle) {
+    if app.get_webview_window(views::SETTINGS).is_some() {
+        let snap = radar_snapshot(&state(app));
+        let _ = app.emit_to(views::SETTINGS, "bt-radar", snap);
+    }
+}
+
 /// 판단에 쓰는 지금 시각 (잠자기 동안에도 흐르는 단조 시계, 자가 진단이면 가짜 시각)
 pub fn logic_now(st: &AppState) -> f64 {
     if let Some(f) = lock(&st.fake).as_ref() {
@@ -150,6 +334,7 @@ pub fn gather(st: &AppState) -> SystemInputs {
             screen_locked: f.locked,
             assertion_holders: f.holders,
             wifi: f.wifi,
+            bluetooth: f.bluetooth,
         };
     }
     let respect = lock(&st.store).settings().respect_display_sleep_assertions;
@@ -171,6 +356,16 @@ pub fn gather(st: &AppState) -> SystemInputs {
     } else {
         st.platform.idle_seconds()
     };
+    let need_bt = st.bt_radar_active.load(Ordering::SeqCst) || {
+        let store = lock(&st.store);
+        let s = store.settings();
+        s.bluetooth_hold_enabled && !s.bluetooth_devices.is_empty()
+    };
+    let bluetooth = if need_bt {
+        st.platform.bluetooth_observations()
+    } else {
+        Vec::new()
+    };
     SystemInputs {
         now: clocks.total,
         awake: clocks.awake,
@@ -180,6 +375,7 @@ pub fn gather(st: &AppState) -> SystemInputs {
         screen_locked: !st.opts.simulate_away && st.platform.screen_locked(),
         assertion_holders: holders,
         wifi: lock(&st.wifi).clone(),
+        bluetooth,
     }
 }
 

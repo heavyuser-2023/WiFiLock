@@ -14,10 +14,18 @@ objc2 = "0.6"
 objc2-foundation = "0.3"
 core-foundation = "0.10"
 libloading = "0.9"
+serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "ApplicationModel",
+    "Devices_Bluetooth",
+    "Devices_Bluetooth_Advertisement",
+    "Devices_Radios",
+    "Foundation",
+    "Foundation_Collections",
+    "Storage_Streams",
+    "Win32_Devices_Bluetooth",
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
     "Win32_NetworkManagement_Ndis",
