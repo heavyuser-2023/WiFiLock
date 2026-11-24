@@ -15,6 +15,8 @@ pub enum EngineState {
     NeverLock,
     /// 다른 앱이 화면 유지를 요청해 보류 중
     HeldByAssertion { holders: Vec<String> },
+    /// 지정한 블루투스 기기가 근처에 있어 보류 중
+    HeldByBluetooth { devices: Vec<String> },
     /// 화면이 이미 잠겨 있음
     ScreenLocked,
     /// 잠금까지 남은 시간을 세는 중
@@ -42,6 +44,8 @@ pub struct TickInput {
     pub screen_is_locked: bool,
     /// 화면 유지를 요청한 앱 이름 (설정에서 존중하지 않기로 했으면 빈 목록)
     pub assertion_holders: Vec<String>,
+    /// 근처에 있어 잠금을 보류 중인 블루투스 기기 이름들
+    pub bluetooth_holders: Vec<String>,
     pub warn_before_lock: bool,
     pub warning_seconds: f64,
 }
@@ -57,6 +61,7 @@ impl TickInput {
             pause: None,
             screen_is_locked: false,
             assertion_holders: Vec::new(),
+            bluetooth_holders: Vec::new(),
             warn_before_lock: true,
             warning_seconds: 10.0,
         }
@@ -154,6 +159,10 @@ impl LockScheduler {
         if !input.assertion_holders.is_empty() {
             self.warning_deadline = None;
             return TickOutput::new(EngineState::HeldByAssertion { holders: input.assertion_holders.clone() }, false);
+        }
+        if !input.bluetooth_holders.is_empty() {
+            self.warning_deadline = None;
+            return TickOutput::new(EngineState::HeldByBluetooth { devices: input.bluetooth_holders.clone() }, false);
         }
         if !self.armed {
             return TickOutput::new(EngineState::WaitingForActivity, false);

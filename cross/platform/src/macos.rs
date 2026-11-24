@@ -24,8 +24,9 @@ use objc2_foundation::NSString;
 use wifilock_core::{WiFiSnapshot, WiFiStatus};
 
 use crate::autolock;
+use crate::macos_bt::MacBluetooth;
 use crate::parse;
-use crate::{LocationStatus, Platform};
+use crate::{BluetoothScanMode, BluetoothStatus, LocationStatus, Platform};
 
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
@@ -103,6 +104,7 @@ pub struct MacPlatform {
     lock_fn: Option<LockFn>,
     _login: Option<libloading::Library>,
     router: Mutex<RouterCache>,
+    bt: MacBluetooth,
 }
 
 impl MacPlatform {
@@ -119,6 +121,7 @@ impl MacPlatform {
             lock_fn: f,
             _login: lib,
             router: Mutex::new(RouterCache { key: String::new(), mac: None, checked_at: None, failures: 0 }),
+            bt: MacBluetooth::new(),
         }
     }
 
@@ -415,6 +418,26 @@ impl Platform for MacPlatform {
         }
     }
 
+    fn bluetooth_status(&self) -> BluetoothStatus {
+        self.bt.status()
+    }
+
+    fn set_bluetooth_mode(&self, mode: BluetoothScanMode) {
+        self.bt.set_mode(mode);
+    }
+
+    fn bluetooth_observations(&self) -> Vec<wifilock_core::BluetoothObservation> {
+        self.bt.observations()
+    }
+
+    fn request_bluetooth_permission(&self) {
+        self.bt.request_permission();
+    }
+
+    fn open_bluetooth_settings(&self) {
+        self.bt.open_settings();
+    }
+
     fn diagnostics(&self) -> Vec<(String, String)> {
         vec![
             ("자리비움 시간".into(), "CGEventSourceSecondsSinceLastEventType".into()),
@@ -425,6 +448,7 @@ impl Platform for MacPlatform {
             ("잠김 여부".into(), "CGSessionCopyCurrentDictionary".into()),
             ("화면 유지 요청".into(), "IOPMCopyAssertionsByProcess".into()),
             ("와이파이".into(), "CoreWLAN (이름은 위치 권한 필요)".into()),
+            ("블루투스".into(), "CoreBluetooth + IOBluetooth".into()),
         ]
     }
 }

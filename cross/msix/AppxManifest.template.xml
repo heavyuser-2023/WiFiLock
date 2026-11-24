@@ -62,5 +62,6 @@
     <rescap:Capability Name="runFullTrust" />
     <DeviceCapability Name="location" />
     <DeviceCapability Name="wiFiControl" />
+    <DeviceCapability Name="bluetooth" />
   </Capabilities>
 </Package>

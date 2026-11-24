@@ -5,8 +5,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Instant;
 
 use tauri::{AppHandle, Manager};
-use wifilock_core::{Controller, SettingsStore, WiFiSnapshot};
-use wifilock_platform::{LocationStatus, Platform, SystemAutoLock};
+use wifilock_core::{BluetoothObservation, Controller, SettingsStore, WiFiSnapshot};
+use wifilock_platform::{BluetoothScanMode, BluetoothStatus, LocationStatus, Platform, SystemAutoLock};
 
 use crate::menu::MenuHandles;
 use crate::options::Options;
@@ -20,6 +20,7 @@ pub struct FakeInputs {
     pub locked: bool,
     pub holders: Vec<String>,
     pub wifi: WiFiSnapshot,
+    pub bluetooth: Vec<BluetoothObservation>,
 }
 
 pub struct AppState {
@@ -55,6 +56,14 @@ pub struct AppState {
     pub hud_idle_since: Mutex<Option<Instant>>,
     /// 운영체제가 스스로 잠그는 조건과 읽은 시각 (설정 창이 열려 있는 동안만 가끔 읽는다)
     pub system_locks: Mutex<(Option<Instant>, Vec<SystemAutoLock>)>,
+    /// 블루투스 권한·전원 상태
+    pub bt_status: Mutex<BluetoothStatus>,
+    /// 설정 창 레이더 스캔 활성화 여부
+    pub bt_radar_active: AtomicBool,
+    /// 마지막으로 플랫폼에 전달한 스캔 모드
+    pub bt_last_mode: Mutex<BluetoothScanMode>,
+    /// 자가 진단에서 레이더 UI 점검 시 넣는 가짜 블루투스 목록
+    pub bt_fake_radar: Mutex<Option<Vec<BluetoothObservation>>>,
 }
 
 impl AppState {
@@ -82,6 +91,10 @@ impl AppState {
             holders: Mutex::new((None, Vec::new())),
             hud_idle_since: Mutex::new(None),
             system_locks: Mutex::new((None, Vec::new())),
+            bt_status: Mutex::new(BluetoothStatus::Unavailable),
+            bt_radar_active: AtomicBool::new(false),
+            bt_last_mode: Mutex::new(BluetoothScanMode::Off),
+            bt_fake_radar: Mutex::new(None),
         }
     }
 }

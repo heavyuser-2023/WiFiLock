@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
+use crate::bluetooth::BluetoothDeviceRule;
 use crate::i18n;
 use crate::policy::{PolicyResolver, WiFiSnapshot};
 use crate::settings::{AppSettings, NetworkRule, DEFAULT_TRUSTED_TIMEOUT};
@@ -140,5 +141,46 @@ impl SettingsStore {
                 }
             }
         })
+    }
+
+    /// 블루투스 근접 보류 기기를 등록한다. 같은 하드웨어 식별자가 이미 있으면 주소를 병합하고 켠다.
+    /// 첫 기기를 추가하면 블루투스 보류 기능도 자동으로 켠다.
+    pub fn add_bluetooth_device(&mut self, mut rule: BluetoothDeviceRule) -> Option<BluetoothDeviceRule> {
+        rule.sanitize();
+        if !rule.has_any_identifier() {
+            return None;
+        }
+        let mut out_id = rule.id;
+        self.update(|s| {
+            let was_empty = s.bluetooth_devices.is_empty();
+            if let Some(existing) = s.bluetooth_devices.iter_mut().find(|d| d.same_device_as(&rule)) {
+                out_id = existing.id;
+                if existing.ble_id.is_none() {
+                    existing.ble_id = rule.ble_id.clone();
+                }
+                if existing.mac_address.is_none() {
+                    existing.mac_address = rule.mac_address.clone();
+                }
+                if existing.classic_address.is_none() {
+                    existing.classic_address = rule.classic_address.clone();
+                }
+                if existing.kind == crate::bluetooth::BluetoothDeviceKind::Other
+                    && rule.kind != crate::bluetooth::BluetoothDeviceKind::Other
+                {
+                    existing.kind = rule.kind;
+                }
+                existing.enabled = true;
+            } else {
+                s.bluetooth_devices.push(rule.clone());
+            }
+            if was_empty && !s.bluetooth_hold_enabled {
+                s.bluetooth_hold_enabled = true;
+            }
+        });
+        self.settings.bluetooth_devices.iter().find(|d| d.id == out_id).cloned()
+    }
+
+    pub fn remove_bluetooth_device(&mut self, id: Uuid) -> bool {
+        self.update(|s| s.bluetooth_devices.retain(|d| d.id != id))
     }
 }

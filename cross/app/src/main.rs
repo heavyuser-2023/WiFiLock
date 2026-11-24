@@ -169,6 +169,13 @@ fn main() {
             commands::set_autostart,
             commands::hud_state,
             commands::page_report,
+            commands::bt_start_scan,
+            commands::bt_stop_scan,
+            commands::bt_get_radar,
+            commands::bt_add_device,
+            commands::bt_remove_device,
+            commands::bt_request_permission,
+            commands::bt_open_settings,
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -224,6 +231,8 @@ fn main() {
             // 처음 상태를 읽어 아이콘·메뉴를 만든다.
             engine::refresh_wifi(&st);
             engine::refresh_location(&st);
+            engine::refresh_bluetooth_status(&st);
+            engine::sync_bluetooth_mode(&handle, &st);
             let first = ui::snapshot(&st);
             let (menu, handles) = menu::build(&handle, &first)?;
             *state::lock(&st.menu) = Some(handles);

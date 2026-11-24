@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "WiFiLock",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "identifier": "com.wifilock.app",
   "build": {
     "frontendDist": "../ui"
@@ -22,8 +22,8 @@
     "copyright": "Copyright (c) 2026 heavyuser-2023",
     "license": "MIT",
     "homepage": "https://github.com/heavyuser-2023/WiFiLock",
-    "shortDescription": "와이파이 연결 상태에 따라 자동 화면 잠금 시간을 바꿔 줍니다",
-    "longDescription": "등록한 네트워크(집·사무실)에서는 길게, 낯선 와이파이에서는 짧게, 와이파이가 없으면 더 짧게 자동으로 화면을 잠그는 메뉴 막대·알림 영역 앱입니다.",
+    "shortDescription": "와이파이와 가까운 블루투스 기기에 맞춰 화면 자동 잠금을 조절합니다",
+    "longDescription": "등록한 와이파이(집·사무실)에서는 길게, 낯선 곳에서는 짧게 잠금을 조절하고, 아이폰·미밴드·에어팟 같은 지정 블루투스 기기가 근처에 있을 때는 자동 잠금을 똑똑하게 보류하는 메뉴 막대·알림 영역 앱입니다.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

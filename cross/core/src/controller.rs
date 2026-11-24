@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+use crate::bluetooth::{BluetoothDeviceLive, BluetoothObservation, BluetoothProximityTracker};
 use crate::format;
 use crate::i18n;
 use crate::policy::{LockPolicy, PolicyResolver, PolicySource, WiFiSnapshot};
@@ -27,6 +28,10 @@ pub struct LockStatus {
     pub policy_change_pending: bool,
     pub last_lock_at: Option<Timestamp>,
     pub paused: bool,
+    /// 등록된 블루투스 기기별 실시간 근접 상태
+    pub bt_live: Vec<BluetoothDeviceLive>,
+    /// 보류 중이던 블루투스 기기가 범위를 벗어나 이탈 유예를 세는 중인지
+    pub bt_leaving: bool,
 }
 
 impl Default for LockStatus {
@@ -38,6 +43,8 @@ impl Default for LockStatus {
             policy_change_pending: false,
             last_lock_at: None,
             paused: false,
+            bt_live: Vec::new(),
+            bt_leaving: false,
         }
     }
 }
@@ -58,6 +65,8 @@ pub struct SystemInputs {
     /// 화면 유지를 요청한 앱 이름들
     pub assertion_holders: Vec<String>,
     pub wifi: WiFiSnapshot,
+    /// 운영체제 블루투스 계층에서 수집한 기기 관측값
+    pub bluetooth: Vec<BluetoothObservation>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +93,7 @@ pub struct Controller {
     /// Some(초) 이면 판단 사이 간격이 이보다 길 때도 깨어난 것으로 본다.
     /// 윈도우 모던 스탠바이처럼 두 시계가 함께 흐르는 대기 상태를 잡기 위한 보조 신호다 (앱 낮잠이 없는 운영체제에서만).
     gap_wake_seconds: Option<f64>,
+    bt_tracker: BluetoothProximityTracker,
 }
 
 impl Controller {
@@ -98,6 +108,7 @@ impl Controller {
             last_screen_locked: None,
             last_clocks: None,
             gap_wake_seconds: None,
+            bt_tracker: BluetoothProximityTracker::new(),
         }
     }
 
@@ -176,6 +187,15 @@ impl Controller {
         self.stabilizer.update(&input.wifi, settings, now);
         let policy = self.current_policy(settings, &input.wifi);
 
+        let bt_report = if settings.bluetooth_hold_enabled && !settings.bluetooth_devices.is_empty() {
+            let (enter, exit) = settings.effective_bluetooth_rssi();
+            self.bt_tracker
+                .update_with_thresholds(now, enter, exit, &settings.bluetooth_devices, &input.bluetooth)
+        } else {
+            self.bt_tracker.reset();
+            Default::default()
+        };
+
         let mut output;
         let mut lock_reason = None;
         match input.idle_seconds {
@@ -190,6 +210,7 @@ impl Controller {
                     pause: self.pause,
                     screen_is_locked: input.screen_locked,
                     assertion_holders: Vec::new(),
+                    bluetooth_holders: Vec::new(),
                     warn_before_lock: false,
                     warning_seconds: 0.0,
                 };
@@ -212,6 +233,7 @@ impl Controller {
                     pause: self.pause,
                     screen_is_locked: input.screen_locked,
                     assertion_holders: holders,
+                    bluetooth_holders: bt_report.holding_devices,
                     warn_before_lock: settings.warn_before_lock,
                     warning_seconds: settings.warning_seconds as f64,
                 };
@@ -248,6 +270,8 @@ impl Controller {
             policy_change_pending: self.stabilizer.pending_since().is_some(),
             last_lock_at: self.status.last_lock_at,
             paused: self.pause.is_some(),
+            bt_live: bt_report.live,
+            bt_leaving: bt_report.any_leaving,
         };
         let changed = new_status != self.status;
         self.status = new_status;

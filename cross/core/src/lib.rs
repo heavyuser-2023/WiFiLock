@@ -3,6 +3,7 @@
 //! 운영체제에 의존하지 않으므로 맥·윈도우·리눅스가 그대로 함께 쓴다.
 //! 시스템 정보(자리비움 시간, 와이파이 상태 등)는 모두 바깥에서 넣어 주므로 가짜 값으로 시험할 수 있다.
 
+pub mod bluetooth;
 pub mod controller;
 pub mod format;
 pub mod i18n;
@@ -12,6 +13,10 @@ pub mod settings;
 pub mod stabilizer;
 pub mod store;
 
+pub use bluetooth::{
+    infer_device_kind, parse_mibeacon_mac, BluetoothDeviceKind, BluetoothDeviceLive, BluetoothDeviceRule,
+    BluetoothObservation, BluetoothProximityTracker, ProximityRange, ProximityReport,
+};
 pub use controller::{Controller, LockStatus, PauseState, SystemInputs, TickResult};
 pub use i18n::Lang;
 pub use policy::{LockPolicy, PolicyResolver, PolicySource, WiFiSnapshot, WiFiStatus};

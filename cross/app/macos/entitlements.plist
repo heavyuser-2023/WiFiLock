@@ -6,5 +6,8 @@
 	     없으면 맥 위치 서비스가 권한 요청 창을 띄우지 않는다. (와이파이 이름을 읽는 데 필요) -->
 	<key>com.apple.security.personal-information.location</key>
 	<true/>
+	<!-- 강화된 실행 환경에서 블루투스 스캔·근접 감지를 위해 필요 -->
+	<key>com.apple.security.device.bluetooth</key>
+	<true/>
 </dict>
 </plist>

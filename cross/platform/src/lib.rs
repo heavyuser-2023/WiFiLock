@@ -2,20 +2,27 @@
 //!
 //! 앱은 [`Platform`] 하나만 보고 동작하고, 맥·윈도우·리눅스의 차이는 이 크레이트 안에 가둔다.
 
-use serde::Serialize;
-use wifilock_core::WiFiSnapshot;
+use serde::{Deserialize, Serialize};
+use wifilock_core::{BluetoothObservation, WiFiSnapshot};
 
 pub mod autolock;
+pub mod bt_common;
 pub mod parse;
 
 pub use autolock::{SettingsTarget, SystemAutoLock, SystemLockNote};
 
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+mod linux_bt;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod macos_bt;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_bt;
 
 /// 와이파이 이름을 읽기 위한 위치 권한 상태
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -37,6 +44,26 @@ impl LocationStatus {
     pub fn has_permission(self) -> bool {
         matches!(self, LocationStatus::NotRequired | LocationStatus::Authorized)
     }
+}
+
+/// 블루투스 사용 가능 및 권한 상태
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BluetoothStatus {
+    Ready,
+    NotDetermined,
+    Unauthorized,
+    PoweredOff,
+    Unavailable,
+}
+
+/// 블루투스 스캔 강도 모드
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BluetoothScanMode {
+    Off,
+    Background,
+    Radar,
 }
 
 /// 운영체제별로 구현하는 시스템 기능
@@ -74,6 +101,25 @@ pub trait Platform: Send + Sync {
 
     /// 그 설정 화면을 연다.
     fn open_system_settings(&self, target: SettingsTarget);
+
+    /// 블루투스 권한·전원·하드웨어 상태
+    fn bluetooth_status(&self) -> BluetoothStatus {
+        BluetoothStatus::Unavailable
+    }
+
+    /// 블루투스 스캔 모드를 바꾼다 (Off / Background / Radar)
+    fn set_bluetooth_mode(&self, _mode: BluetoothScanMode) {}
+
+    /// 현재까지 수집된 블루투스 기기 관측값 (BLE 캐시 + 페어링 기기)
+    fn bluetooth_observations(&self) -> Vec<BluetoothObservation> {
+        Vec::new()
+    }
+
+    /// 블루투스 권한을 요청한다 (이미 거부·제한되었으면 설정 화면을 연다)
+    fn request_bluetooth_permission(&self) {}
+
+    /// 운영체제 블루투스 설정 화면을 연다
+    fn open_bluetooth_settings(&self) {}
 
     /// 자가 진단용: 기능별로 어떤 방법을 쓰는지
     fn diagnostics(&self) -> Vec<(String, String)>;

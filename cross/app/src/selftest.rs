@@ -13,7 +13,10 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
-use wifilock_core::{EngineState, SettingsStore, WiFiSnapshot, WiFiStatus};
+use wifilock_core::{
+    BluetoothDeviceKind, BluetoothDeviceRule, BluetoothObservation, EngineState, ProximityRange, SettingsStore,
+    WiFiSnapshot, WiFiStatus,
+};
 
 use crate::engine;
 use crate::menu;
@@ -180,6 +183,7 @@ impl SelfTest {
             format!("{:?} / {} / 공유기 {}", w.status, w.korean_description(), w.router_mac.as_deref().unwrap_or("-")),
         );
         self.info("위치 권한 상태", format!("{:?}", p.location_status()));
+        self.info("블루투스 상태", format!("{:?}", p.bluetooth_status()));
         let locks = p.system_auto_locks();
         self.info(
             "운영체제 자체 잠금 설정 읽기",
@@ -225,11 +229,17 @@ impl SelfTest {
         let hardened = info.lines().any(|l| l.contains("flags=") && l.contains("runtime"));
         let ents = run(&["-d", "--entitlements", "-", "--xml"]);
         let has_location = ents.contains("com.apple.security.personal-information.location");
+        let has_bt = ents.contains("com.apple.security.device.bluetooth");
         if hardened {
             self.check(
                 "강화된 실행 환경에서 위치 권한 요청 가능 (엔타이틀먼트)",
                 has_location,
                 if has_location { "com.apple.security.personal-information.location 있음" } else { "엔타이틀먼트 없음: 위치 권한 요청 창이 뜨지 않는다" },
+            );
+            self.check(
+                "강화된 실행 환경에서 블루투스 사용 가능 (엔타이틀먼트)",
+                has_bt,
+                if has_bt { "com.apple.security.device.bluetooth 있음" } else { "엔타이틀먼트 없음: 블루투스 권한 요청이 동작하지 않는다" },
             );
         } else {
             self.info("앱 서명 확인", "강화된 실행 환경이 아님");
@@ -329,6 +339,7 @@ impl SelfTest {
             locked: false,
             holders: vec![],
             wifi: lock(&st.wifi).clone(),
+            bluetooth: vec![],
         });
         f(fake);
     }
@@ -604,6 +615,103 @@ impl SelfTest {
         let back = shown.as_ref().is_some_and(|(icon, title)| *icon == IconKind::Active && title.is_none())
             && !ids.iter().any(|i| i == "status-holders" || i == "status-held-hint");
         self.check("보류가 끝나면 아이콘·메뉴 원래대로", back, format!("{shown:?}"));
+
+        // 블루투스 근접 보류 (가까움 / 중간 가까움 / 먼 거리 3단계 및 이탈 유예)
+        let band_rule = BluetoothDeviceRule::new(
+            "SelfTestBand",
+            BluetoothDeviceKind::Band,
+            None,
+            Some("04:34:c3:64:6f:d1"),
+            None,
+        );
+        lock(&st.store).add_bluetooth_device(band_rule);
+        lock(&st.store).update(|x| x.bluetooth_range = ProximityRange::Near);
+        self.set_fake(|f| {
+            f.idle = 200.0;
+            f.bluetooth = vec![BluetoothObservation {
+                key: "band".into(),
+                name: Some("SelfTestBand".into()),
+                kind: BluetoothDeviceKind::Band,
+                ble_id: None,
+                mac_address: Some("04:34:c3:64:6f:d1".into()),
+                classic_address: None,
+                rssi: Some(-58),
+                connected: false,
+                paired: false,
+                seen_at: f.now,
+            }];
+        });
+        self.tick();
+        let (_, _, s, _, ids) = self.menu_texts();
+        let holders_line = lock(&st.menu).as_ref().map(|h| h.holders.clone()).and_then(|h| h.text().ok()).unwrap_or_default();
+        let bt_icon = lock(&st.ui).as_ref().map(|u| u.icon);
+        self.check(
+            "블루투스 근접 보류 (가까움 -58 dBm)",
+            s == "지금은 자동으로 잠기지 않음"
+                && holders_line == "근처 기기: SelfTestBand"
+                && bt_icon == Some(IconKind::Held)
+                && ids.iter().any(|i| i == "status-holders"),
+            format!("{s} / {holders_line}"),
+        );
+
+        // 이탈(-78 dBm): 10초 동안은 유예로 보류 유지, 18초 경과 후 보류 해제
+        for step in 1..=20 {
+            self.set_fake(|f| {
+                f.now += 1.0;
+                f.idle += 1.0;
+                f.bluetooth[0].rssi = Some(-78);
+                f.bluetooth[0].seen_at = f.now;
+            });
+            self.tick();
+            if step == 10 {
+                let held_still = matches!(lock(&st.controller).status().state, EngineState::HeldByBluetooth { .. });
+                self.check("블루투스 이탈 유예 (10초 동안 보류 유지)", held_still, "");
+            }
+        }
+        let released = !matches!(lock(&st.controller).status().state, EngineState::HeldByBluetooth { .. });
+        self.check("블루투스 15초 이상 범위 밖이면 보류 해제", released, "");
+
+        // 중간 가까움(-72 dBm)과 먼 거리(-85 dBm) 임계값 확인 (이전 20초 샘플 윈도우를 만료시킨 뒤 2샘플로 진입 확인)
+        lock(&st.store).update(|x| x.bluetooth_range = ProximityRange::Medium);
+        self.set_fake(|f| {
+            f.idle = 0.0;
+            f.now += 26.0;
+        });
+        for _ in 0..2 {
+            self.set_fake(|f| {
+                f.now += 1.0;
+                f.bluetooth[0].rssi = Some(-72);
+                f.bluetooth[0].seen_at = f.now;
+            });
+            self.tick();
+        }
+        let med_held = matches!(lock(&st.controller).status().state, EngineState::HeldByBluetooth { .. });
+        self.check("블루투스 거리 프리셋: 중간 가까움 (-72 dBm 보류)", med_held, "");
+
+        lock(&st.store).update(|x| x.bluetooth_range = ProximityRange::Far);
+        self.set_fake(|f| f.now += 26.0);
+        for _ in 0..2 {
+            self.set_fake(|f| {
+                f.now += 1.0;
+                f.bluetooth[0].rssi = Some(-85);
+                f.bluetooth[0].seen_at = f.now;
+            });
+            self.tick();
+        }
+        let far_held = matches!(lock(&st.controller).status().state, EngineState::HeldByBluetooth { .. });
+        self.check("블루투스 거리 프리셋: 먼 거리 (-85 dBm 보류)", far_held, "");
+
+        // 정리
+        lock(&st.store).update(|x| {
+            x.bluetooth_hold_enabled = false;
+            x.bluetooth_range = ProximityRange::Near;
+            x.bluetooth_devices.clear();
+        });
+        self.set_fake(|f| {
+            f.bluetooth.clear();
+            f.idle = 0.0;
+        });
+        self.tick();
     }
 
     // ---------- 6. 설정 창 ----------
@@ -649,7 +757,7 @@ impl SelfTest {
             .and_then(|v| v.as_array())
             .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
             .unwrap_or_default();
-        for name in ["일반", "현재 네트워크", "네트워크별 잠금 시간", "기본 잠금 시간", "고급"] {
+        for name in ["일반", "현재 상태", "네트워크별 잠금 시간", "잠금 보류", "고급"] {
             self.check(&format!("설정 창 항목 '{name}'"), sections.iter().any(|s| s == name), "");
         }
         let rules = report.get("ruleCount").and_then(|v| v.as_u64()).unwrap_or(0);
@@ -672,7 +780,11 @@ impl SelfTest {
 
         // 화면에서 값을 바꾸면 저장되고 메뉴에 반영된다
         self.eval_settings("window.wifilockTest && window.wifilockTest.setUnknown(600)");
-        let saved = wait_until(Duration::from_secs(10), || lock(&st.store).settings().unknown_wifi_timeout_seconds == 600);
+        let saved = wait_until(Duration::from_secs(10), || {
+            let store = lock(&st.store);
+            let s = store.settings();
+            s.unknown_wifi_timeout_seconds == 600 && s.no_wifi_timeout_seconds == 600
+        });
         self.check("설정 창에서 바꾼 값 저장", saved, "");
         self.set_fake(|f| f.wifi = WiFiSnapshot::connected(Some("SelfTestCafe"), Some("02:00:00:00:00:99")));
         self.advance(1);
@@ -702,6 +814,83 @@ impl SelfTest {
             got && shown == Some(expected)
         });
         self.check("삭제 뒤 설정 창 목록 갱신", redrawn, format!("화면 {shown:?}개 / 저장 {expected}개"));
+
+        // 블루투스 3단계 프리셋 전환, 커스텀 RSSI 및 레이더 블립 렌더링 점검
+        self.eval_settings("window.wifilockTest && window.wifilockTest.setBluetoothRange('medium')");
+        let range_saved = wait_until(Duration::from_secs(10), || {
+            let store = lock(&st.store);
+            let s = store.settings();
+            s.bluetooth_range == ProximityRange::Medium && s.bluetooth_custom_rssi.is_none()
+        });
+        self.check("설정 창에서 블루투스 거리 프리셋 저장", range_saved, "");
+
+        self.eval_settings("window.wifilockTest && window.wifilockTest.setBluetoothCustomRssi(-77)");
+        let custom_saved = wait_until(Duration::from_secs(10), || {
+            lock(&st.store).settings().bluetooth_custom_rssi == Some(-77)
+        });
+        self.check("설정 창에서 블루투스 임의 감도 저장", custom_saved, "");
+
+        self.eval_settings("window.wifilockTest && window.wifilockTest.setBluetoothRange('near')");
+        let reset_saved = wait_until(Duration::from_secs(5), || {
+            let store = lock(&st.store);
+            let s = store.settings();
+            s.bluetooth_range == ProximityRange::Near && s.bluetooth_custom_rssi.is_none()
+        });
+        self.check("프리셋 재선택 시 임의 감도 초기화", reset_saved, "");
+
+        let now = engine::logic_now(&st);
+        *lock(&st.bt_fake_radar) = Some(vec![
+            BluetoothObservation {
+                key: "fake:iphone".into(),
+                name: Some("heavyuser".into()),
+                kind: BluetoothDeviceKind::Phone,
+                ble_id: Some("3B88C703".into()),
+                mac_address: None,
+                classic_address: Some("64:6d:2f:a7:28:fc".into()),
+                rssi: Some(-55),
+                connected: false,
+                paired: true,
+                seen_at: now,
+            },
+            BluetoothObservation {
+                key: "fake:band".into(),
+                name: Some("Xiaomi Smart Band 10 6FD1".into()),
+                kind: BluetoothDeviceKind::Band,
+                ble_id: Some("7B7B8BF0".into()),
+                mac_address: Some("04:34:c3:64:6f:d1".into()),
+                classic_address: None,
+                rssi: Some(-57),
+                connected: false,
+                paired: false,
+                seen_at: now,
+            },
+            BluetoothObservation {
+                key: "fake:airpods".into(),
+                name: Some("Heavyuser’s AirPods Pro".into()),
+                kind: BluetoothDeviceKind::Audio,
+                ble_id: Some("F6C17078".into()),
+                mac_address: None,
+                classic_address: Some("cc:22:fe:38:f9:c4".into()),
+                rssi: Some(-61),
+                connected: true,
+                paired: true,
+                seen_at: now,
+            },
+        ]);
+        self.eval_settings("window.wifilockTest && window.wifilockTest.openRadar()");
+        let mut blip_count = 0u64;
+        let radar_ok = wait_until(Duration::from_secs(10), || {
+            *lock(&st.page_report) = None;
+            self.eval_settings("window.wifilockTest && window.wifilockTest.report('radar')");
+            let got = wait_until(Duration::from_secs(2), || lock(&st.page_report).is_some());
+            let r = lock(&st.page_report).clone().unwrap_or_default();
+            blip_count = r.pointer("/bluetooth/radarBlips").and_then(|v| v.as_u64()).unwrap_or(0);
+            let open = r.pointer("/bluetooth/radarOpen").and_then(|v| v.as_bool()).unwrap_or(false);
+            got && open && blip_count == 3
+        });
+        self.check("설정 창 레이더 UI 렌더링 (블립 3개)", radar_ok, format!("블립 {blip_count}개"));
+        self.eval_settings("window.wifilockTest && window.wifilockTest.closeRadar()");
+        *lock(&st.bt_fake_radar) = None;
 
         let a = self.app.clone();
         main_sync(&self.app, move || {

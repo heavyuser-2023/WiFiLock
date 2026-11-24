@@ -13,6 +13,6 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <data name="AppDescription" xml:space="preserve">
-    <value>Automatically adjusts your screen lock timeout based on the connected Wi-Fi network.</value>
+    <value>Smartly adjusts screen auto-lock based on your Wi-Fi network and nearby Bluetooth devices.</value>
   </data>
 </root>

@@ -19,8 +19,9 @@ use zbus::blocking::{connection, proxy::Builder, Connection, Proxy};
 use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 
+use crate::linux_bt::LinuxBluetooth;
 use crate::parse;
-use crate::{LocationStatus, Platform};
+use crate::{BluetoothScanMode, BluetoothStatus, LocationStatus, Platform};
 
 /// CLOCK_MONOTONIC 은 절전 동안 멈추고, CLOCK_BOOTTIME 은 계속 흐른다.
 pub fn clocks() -> crate::Clocks {
@@ -60,6 +61,7 @@ pub struct LinuxPlatform {
     last_lock_method: Mutex<String>,
     /// (장치|게이트웨이 주소) → 공유기 하드웨어 주소. 잠깐 못 읽어도 규칙이 풀리지 않도록 보관한다.
     router_cache: Mutex<Option<(String, String)>>,
+    bt: LinuxBluetooth,
 }
 
 fn proxy<'a>(conn: &'a Connection, dest: &'a str, path: &'a str, iface: &'a str) -> zbus::Result<Proxy<'a>> {
@@ -110,6 +112,7 @@ impl LinuxPlatform {
             x11: Mutex::new(None),
             last_lock_method: Mutex::new(String::new()),
             router_cache: Mutex::new(None),
+            bt: LinuxBluetooth::new(),
         }
     }
 
@@ -540,6 +543,28 @@ impl Platform for LinuxPlatform {
         }
     }
 
+    fn bluetooth_status(&self) -> BluetoothStatus {
+        self.bt.status(self.system.as_ref())
+    }
+
+    fn set_bluetooth_mode(&self, mode: BluetoothScanMode) {
+        self.bt.set_mode(mode);
+    }
+
+    fn bluetooth_observations(&self) -> Vec<wifilock_core::BluetoothObservation> {
+        self.bt.observations(self.system.as_ref())
+    }
+
+    fn request_bluetooth_permission(&self) {
+        if self.bluetooth_status() == BluetoothStatus::PoweredOff {
+            self.bt.open_settings();
+        }
+    }
+
+    fn open_bluetooth_settings(&self) {
+        self.bt.open_settings();
+    }
+
     fn diagnostics(&self) -> Vec<(String, String)> {
         let idle = match *self.idle_method.lock().unwrap() {
             IdleMethod::Mutter => "그놈 Mutter IdleMonitor",
@@ -554,6 +579,7 @@ impl Platform for LinuxPlatform {
             ("잠김 여부".into(), "logind LockedHint/Active → ScreenSaver.GetActive".into()),
             ("화면 유지 요청".into(), "그놈 세션 관리자 → logind → KDE 전원 관리".into()),
             ("와이파이".into(), if self.system.is_some() { "네트워크매니저 (D-Bus)" } else { "/sys/class/net" }.into()),
+            ("블루투스".into(), if self.system.is_some() { "BlueZ (D-Bus)" } else { "사용 불가 (시스템 버스 없음)" }.into()),
             ("세션 버스".into(), if self.session.is_some() { "연결됨" } else { "없음" }.into()),
             ("시스템 버스".into(), if self.system.is_some() { "연결됨" } else { "없음" }.into()),
         ]

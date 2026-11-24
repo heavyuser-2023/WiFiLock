@@ -42,7 +42,8 @@ use windows::Win32::System::Shutdown::LockWorkStation;
 use wifilock_core::{WiFiSnapshot, WiFiStatus};
 
 use crate::parse;
-use crate::{LocationStatus, Platform};
+use crate::windows_bt::WindowsBluetooth;
+use crate::{BluetoothScanMode, BluetoothStatus, LocationStatus, Platform};
 
 const IF_TYPE_IEEE80211: u32 = 71;
 const STARTUP_TASK_ID: &str = "WiFiLockStartup";
@@ -58,7 +59,7 @@ pub fn is_packaged() -> bool {
 }
 
 /// UI(STA) 스레드에서 WinRT 비동기 `.join()` 시 데드락을 피하기 위해 별도 MTA 스레드에서 실행한다.
-fn run_on_mta<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+pub(crate) fn run_on_mta<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     std::thread::Builder::new()
         .name("wifilock-winrt".into())
         .spawn(f)
@@ -191,11 +192,16 @@ pub struct WindowsPlatform {
     ssid_denied: AtomicBool,
     /// (어댑터|게이트웨이 주소) → 공유기 하드웨어 주소. 깨어난 직후처럼 잠깐 못 읽어도 규칙이 풀리지 않도록 보관한다.
     router_cache: Mutex<Option<(String, String)>>,
+    bt: WindowsBluetooth,
 }
 
 impl WindowsPlatform {
     pub fn new() -> Self {
-        WindowsPlatform { ssid_denied: AtomicBool::new(false), router_cache: Mutex::new(None) }
+        WindowsPlatform {
+            ssid_denied: AtomicBool::new(false),
+            router_cache: Mutex::new(None),
+            bt: WindowsBluetooth::new(),
+        }
     }
 
     fn clear_router_cache(&self) {
@@ -240,7 +246,7 @@ impl Drop for WlanHandle {
     }
 }
 
-fn wide_to_string(w: &[u16]) -> String {
+pub(crate) fn wide_to_string(w: &[u16]) -> String {
     let end = w.iter().position(|c| *c == 0).unwrap_or(w.len());
     String::from_utf16_lossy(&w[..end])
 }
@@ -518,6 +524,26 @@ impl Platform for WindowsPlatform {
         }
     }
 
+    fn bluetooth_status(&self) -> BluetoothStatus {
+        self.bt.status()
+    }
+
+    fn set_bluetooth_mode(&self, mode: BluetoothScanMode) {
+        self.bt.set_mode(mode);
+    }
+
+    fn bluetooth_observations(&self) -> Vec<wifilock_core::BluetoothObservation> {
+        self.bt.observations()
+    }
+
+    fn request_bluetooth_permission(&self) {
+        self.bt.open_settings();
+    }
+
+    fn open_bluetooth_settings(&self) {
+        self.bt.open_settings();
+    }
+
     fn diagnostics(&self) -> Vec<(String, String)> {
         vec![
             ("실행 형태".into(), if is_packaged() { "MSIX 패키지 (Microsoft Store)".into() } else { "일반 설치".into() }),
@@ -526,6 +552,7 @@ impl Platform for WindowsPlatform {
             ("잠김 여부".into(), "WTSQuerySessionInformationW(WTSSessionInfoEx)".into()),
             ("화면 유지 요청".into(), "CallNtPowerInformation(SystemExecutionState) — 앱 이름은 알 수 없음".into()),
             ("와이파이".into(), "WLAN API + GetIpNetTable2".into()),
+            ("블루투스".into(), "WinRT BluetoothLEAdvertisementWatcher + Win32 페어링 목록".into()),
         ]
     }
 }
