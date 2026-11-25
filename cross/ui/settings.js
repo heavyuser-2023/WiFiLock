@@ -652,11 +652,11 @@ function renderBluetooth() {
 
   setText("bt-radar-toggle", radarOpen ? str.btRadarToggleClose : str.btRadarToggleOpen);
 
-  // 등록 기기 목록
+  // 등록 기기 목록 (구조가 바뀔 때만 행 DOM을 다시 만들고, 평상시 1초 갱신은 제자리 갱신해 스위치 조작 유실을 막는다)
   const box = $("bt-devices");
-  const key = JSON.stringify([currentLang(), s.bluetoothDevices, bt.live, s.bluetoothHoldEnabled]);
-  if (key !== lastBtDevicesKey && !editingBtName()) {
-    lastBtDevicesKey = key;
+  const structKey = JSON.stringify([currentLang(), s.bluetoothDevices.map((d) => [d.id, d.kind])]);
+  if (structKey !== lastBtDevicesKey) {
+    lastBtDevicesKey = structKey;
     if (s.bluetoothDevices.length === 0) {
       const p = document.createElement("div");
       p.className = "empty";
@@ -664,11 +664,15 @@ function renderBluetooth() {
       box.replaceChildren(p);
     } else {
       const rows = s.bluetoothDevices.map((dev) => {
-        const live = bt.live.find((l) => l.ruleId === dev.id);
-        const holding = !!(s.bluetoothHoldEnabled && live && live.holding);
+        const devId = dev.id;
+        const latestName = () => {
+          const cur = state && state.settings.bluetoothDevices.find((x) => x.id === devId);
+          return cur ? cur.name : dev.name;
+        };
 
         const row = document.createElement("div");
-        row.className = "row bt-device" + (holding ? " is-holding" : "");
+        row.className = "row bt-device";
+        row.dataset.id = devId;
 
         const icon = document.createElement("div");
         icon.className = "bt-kind-icon";
@@ -679,45 +683,39 @@ function renderBluetooth() {
         const name = document.createElement("input");
         name.type = "text";
         name.className = "name";
-        name.value = dev.name;
         name.setAttribute("aria-label", str.btNameAria);
         name.addEventListener("change", () => {
           const v = name.value.trim();
           if (!v) {
-            name.value = dev.name;
+            name.value = latestName();
             return;
           }
-          lastBtDevicesKey = "";
           save((n) => {
-            const d = n.bluetoothDevices.find((x) => x.id === dev.id);
+            const d = n.bluetoothDevices.find((x) => x.id === devId);
             if (d) d.name = v;
           });
         });
         name.addEventListener("keydown", (e) => {
           if (e.key === "Enter") name.blur();
           if (e.key === "Escape") {
-            name.value = dev.name;
+            name.value = latestName();
             name.blur();
           }
         });
         const ident = document.createElement("div");
         ident.className = "desc";
-        ident.textContent = btIdentText(dev, str);
         text.append(name, ident);
 
         const badge = document.createElement("span");
-        const bi = btBadgeInfo(dev, live, str);
-        badge.className = "bt-badge" + (bi.cls ? ` ${bi.cls}` : "");
-        badge.textContent = bi.text;
+        badge.className = "bt-badge";
 
         const toggle = document.createElement("input");
         toggle.type = "checkbox";
         toggle.className = "switch";
-        toggle.checked = dev.enabled;
         toggle.setAttribute("aria-label", str.btToggleAria);
         toggle.addEventListener("change", () => {
           save((n) => {
-            const d = n.bluetoothDevices.find((x) => x.id === dev.id);
+            const d = n.bluetoothDevices.find((x) => x.id === devId);
             if (d) d.enabled = toggle.checked;
           });
         });
@@ -726,12 +724,41 @@ function renderBluetooth() {
         del.className = "icon danger";
         del.textContent = str.deleteText;
         del.title = str.btDeleteTip;
-        del.addEventListener("click", () => removeBtDevice(dev.id));
+        del.addEventListener("click", () => removeBtDevice(devId));
 
+        row._refs = { name, ident, badge, toggle };
         row.append(icon, text, badge, toggle, del);
         return row;
       });
       box.replaceChildren(...rows);
+    }
+  }
+
+  for (const row of box.children) {
+    const refs = row._refs;
+    if (!refs) continue;
+    const dev = s.bluetoothDevices.find((d) => d.id === row.dataset.id);
+    if (!dev) continue;
+    const live = bt.live.find((l) => l.ruleId === dev.id);
+    const holding = !!(s.bluetoothHoldEnabled && live && live.holding);
+    row.classList.toggle("is-holding", holding);
+    if (document.activeElement !== refs.name && refs.name.value !== dev.name) {
+      refs.name.value = dev.name;
+    }
+    const identText = btIdentText(dev, str);
+    if (refs.ident.textContent !== identText) {
+      refs.ident.textContent = identText;
+    }
+    const bi = btBadgeInfo(dev, live, str);
+    const badgeClass = "bt-badge" + (bi.cls ? ` ${bi.cls}` : "");
+    if (refs.badge.className !== badgeClass) {
+      refs.badge.className = badgeClass;
+    }
+    if (refs.badge.textContent !== bi.text) {
+      refs.badge.textContent = bi.text;
+    }
+    if (refs.toggle.checked !== dev.enabled) {
+      refs.toggle.checked = dev.enabled;
     }
   }
 
