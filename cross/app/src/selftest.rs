@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use wifilock_core::{
-    BluetoothDeviceKind, BluetoothDeviceRule, BluetoothObservation, EngineState, ProximityRange, SettingsStore,
+    BluetoothDeviceKind, BluetoothDeviceRule, BluetoothObservation, EngineState, Lang, ProximityRange, SettingsStore,
     WiFiSnapshot, WiFiStatus,
 };
 
@@ -490,26 +490,44 @@ impl SelfTest {
         };
         let (in_minutes, badge_min) = snap_with(true);
         let (in_seconds, badge_sec) = snap_with(false);
+        // 2자리 배지는 99초 이하에서만 초 단위(Seconds)를 쓰고, 100초 이상은 분 올림(Minutes)을 쓴다.
+        let mut sec_settings = lock(&st.store).settings().clone();
+        sec_settings.show_countdown_in_menu_bar = true;
+        sec_settings.countdown_in_minutes = false;
+        let badge_sub99 = TrayBadge::compute(
+            &EngineState::Counting { remaining: 90.0, timeout: 120.0 },
+            &sec_settings,
+            Lang::Ko,
+            !cfg!(target_os = "macos"),
+        );
         lock(&st.store).update(|x| {
             x.show_countdown_in_menu_bar = false;
             x.countdown_in_minutes = false;
         });
+        let badge_sec_expected_ok = if remaining > 99.0 {
+            matches!(badge_sec, TrayBadge::Countdown { unit: BadgeUnit::Minutes, .. })
+        } else {
+            matches!(badge_sec, TrayBadge::Countdown { unit: BadgeUnit::Seconds, .. })
+        };
         let title_ok = if cfg!(target_os = "windows") {
             let min_img = ui::tray_image_for_badge(&badge_min);
-            let sec_img = ui::tray_image_for_badge(&badge_sec);
+            let sec_img = ui::tray_image_for_badge(&badge_sub99);
             in_minutes.is_none()
                 && in_seconds.is_none()
                 && matches!(badge_min, TrayBadge::Countdown { unit: BadgeUnit::Minutes, .. })
-                && matches!(badge_sec, TrayBadge::Countdown { unit: BadgeUnit::Seconds, .. })
+                && badge_sec_expected_ok
+                && matches!(badge_sub99, TrayBadge::Countdown { ref text, unit: BadgeUnit::Seconds, .. } if text == "90")
                 && min_img.width() == 64
                 && sec_img.width() == 64
         } else {
             let badge_ok = if cfg!(target_os = "linux") {
                 matches!(badge_min, TrayBadge::Countdown { unit: BadgeUnit::Minutes, .. })
-                    && matches!(badge_sec, TrayBadge::Countdown { unit: BadgeUnit::Seconds, .. })
+                    && badge_sec_expected_ok
+                    && matches!(badge_sub99, TrayBadge::Countdown { ref text, unit: BadgeUnit::Seconds, .. } if text == "90")
             } else {
                 matches!(badge_min, TrayBadge::Static(IconKind::Active))
                     && matches!(badge_sec, TrayBadge::Static(IconKind::Active))
+                    && matches!(badge_sub99, TrayBadge::Static(IconKind::Active))
             };
             remaining > 60.0
                 && in_minutes.as_deref().is_some_and(|t| t.ends_with('분') && !t.contains(':'))
