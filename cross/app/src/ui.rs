@@ -17,6 +17,7 @@ use wifilock_platform::{BluetoothStatus, LocationStatus, SystemLockNote};
 
 use crate::menu;
 use crate::state::{lock, state, AppState};
+pub use crate::tray_badge::{BadgeUnit, TrayBadge};
 use crate::views;
 
 pub const TRAY_ID: &str = "main";
@@ -45,6 +46,7 @@ pub struct MenuStructure {
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiSnapshot {
     pub icon: IconKind,
+    pub icon_badge: TrayBadge,
     pub tooltip: String,
     pub title: Option<String>,
     pub network: String,
@@ -131,6 +133,7 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
         ref s if is_active(s) => IconKind::Active,
         _ => IconKind::Inactive,
     };
+    let icon_badge = TrayBadge::compute(&status.state, &settings, i18n::current(), !cfg!(target_os = "macos"));
     // 보류 중이면 메뉴 첫 줄은 "잠기지 않음"만 쓰고, 사유는 다음 줄에 따로 보인다.
     let state_text = match &held_lines {
         Some(_) => format::held_headline(),
@@ -148,7 +151,7 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
     };
     // 메뉴 막대 글자는 바뀔 때만 다시 그린다 (apply). 분 단위면 마지막 1분 전까지는 1분에 한 번만 바뀐다.
     // 잠금 보류는 남은 시간 표시를 꺼 두었어도 글자로 알린다 (아이콘만으로는 놓치기 쉬워서).
-    // 윈도우 알림 영역에는 글자를 둘 수 없어 아이콘과 도움말로 알린다.
+    // 윈도우·리눅스는 알림 영역 아이콘 자체에도 남은 시간/보류 배지를 함께 그린다.
     let title = if cfg!(any(target_os = "macos", target_os = "linux")) {
         match status.state {
             EngineState::HeldByAssertion { .. } | EngineState::HeldByBluetooth { .. } => Some(format::menu_bar_held()),
@@ -189,6 +192,7 @@ pub fn snapshot(st: &AppState) -> UiSnapshot {
     let (holders, held_hint) = held_lines.unwrap_or_default();
     UiSnapshot {
         icon,
+        icon_badge,
         tooltip,
         title,
         network: network_text(snap),
@@ -239,14 +243,19 @@ pub fn tray_image(kind: IconKind) -> Image<'static> {
     Image::from_bytes(bytes).expect("아이콘 그림")
 }
 
+/// 동적 배지(`Held` / `Countdown`)는 64×64 RGBA 배지를 생성하고, 정적 상태는 기본 아이콘을 반환한다.
+pub fn tray_image_for_badge(badge: &TrayBadge) -> Image<'static> {
+    crate::tray_badge::render_badge(badge).unwrap_or_else(|| tray_image(badge.fallback_icon()))
+}
+
 /// 주 스레드에서만 부른다.
 fn apply(app: &AppHandle, snap: UiSnapshot) {
     let st = state(app);
     let prev = lock(&st.ui).clone();
     let Some(tray) = app.tray_by_id(TRAY_ID) else { return };
 
-    if prev.as_ref().map(|p| p.icon) != Some(snap.icon) {
-        let _ = tray.set_icon(Some(tray_image(snap.icon)));
+    if prev.as_ref().map(|p| &p.icon_badge) != Some(&snap.icon_badge) {
+        let _ = tray.set_icon(Some(tray_image_for_badge(&snap.icon_badge)));
         #[cfg(target_os = "macos")]
         let _ = tray.set_icon_as_template(true);
     }
@@ -594,7 +603,7 @@ pub fn ui_state(app: &AppHandle) -> UiState {
         timeout_presets: TimeoutPresets::ALL.to_vec(),
         timeout_labels,
         warning_options,
-        countdown_supported: cfg!(any(target_os = "macos", target_os = "linux")),
+        countdown_supported: true,
         holders_note,
         system_lock,
         bluetooth,

@@ -115,6 +115,9 @@ const STRINGS = {
     countdownLabel: "메뉴 막대에 남은 시간 표시",
     countdownDesc:
       "분 단위는 남은 시간이 1분에 한 번만 바뀌고 마지막 1분만 초 단위로 세어, 매 초 바뀌는 초 단위보다 컴퓨터 자원을 덜 씁니다.",
+    countdownLabelWin: "알림 영역 아이콘에 남은 시간 표시",
+    countdownDescWin:
+      "트레이 아이콘 위에 남은 분·초와 진행 막대를 표시합니다. 분 단위는 마지막 1분 전까지 1분에 한 번만 갱신되어 자원을 덜 씁니다.",
     countdownModes: { off: "표시 안 함", minutes: "분 단위", seconds: "초 단위" },
     emptyRules:
       "등록된 네트워크가 없습니다. 집이나 사무실처럼 믿을 수 있는 네트워크를 등록하면 그곳에서는 잠금 시간을 길게 둘 수 있습니다.",
@@ -214,6 +217,9 @@ const STRINGS = {
     countdownLabel: "Show countdown in menu bar",
     countdownDesc:
       "Minute mode updates once per minute until the final minute, using fewer resources than second-by-second updates.",
+    countdownLabelWin: "Show countdown on tray icon",
+    countdownDescWin:
+      "Draws remaining minutes or seconds and a progress bar on the tray icon. Minute mode updates once per minute until the final minute.",
     countdownModes: { off: "Off", minutes: "Minutes", seconds: "Seconds" },
     emptyRules:
       "No registered networks. Add trusted networks like home or office to use longer lock times there.",
@@ -1095,6 +1101,9 @@ function render(next) {
   $("holders-note").hidden = !state.holdersNote;
   setText("holders-note", state.holdersNote);
   $("countdown-row").hidden = !state.countdownSupported;
+  const winBadge = state.os === "windows";
+  setText("countdown-label", winBadge ? str.countdownLabelWin : str.countdownLabel);
+  setText("countdown-desc", winBadge ? str.countdownDescWin : str.countdownDesc);
   fillSelect(
     $("countdown"),
     Object.keys(str.countdownModes),
