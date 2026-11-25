@@ -28,7 +28,8 @@ extern "C" {
 
 const BLE_CACHE_TTL: f64 = 30.0;
 const BLE_CACHE_MAX: usize = 512;
-const PROFILER_CACHE_TTL: f64 = 20.0;
+const PROFILER_LIVE_TTL: f64 = 25.0;
+const PROFILER_CACHE_TTL: f64 = 60.0;
 
 #[derive(Debug, Clone)]
 struct ProfilerReading {
@@ -37,12 +38,24 @@ struct ProfilerReading {
     seen_at: f64,
 }
 
+#[derive(Debug, Clone)]
+struct ProfilerTrack {
+    connected: bool,
+    rssi: Option<i16>,
+    /// 연결 기기는 마지막 조회 시각, 비연결 기기는 RSSI 값이 실제로 변동된 마지막 시각
+    changed_at: f64,
+    /// 비연결 기기가 최소 1회 이상 RSSI 변동을 보여 실시간 신호임이 확인되었는지
+    confirmed_live: bool,
+    /// 마지막으로 system_profiler 응답에 등장한 시각
+    polled_at: f64,
+}
+
 #[derive(Default)]
 struct BtShared {
     /// CBManagerState: 0=Unknown, 1=Resetting, 2=Unsupported, 3=Unauthorized, 4=PoweredOff, 5=PoweredOn
     cb_state: isize,
     ble_cache: HashMap<String, BluetoothObservation>,
-    profiler_cache: HashMap<String, ProfilerReading>,
+    profiler_tracks: HashMap<String, ProfilerTrack>,
 }
 
 struct ScanControl {
@@ -393,10 +406,10 @@ impl MacBluetooth {
         let (ble, profiler) = {
             let mut g = self.shared.lock().unwrap_or_else(|e| e.into_inner());
             g.ble_cache.retain(|_, v| now - v.seen_at <= BLE_CACHE_TTL);
-            g.profiler_cache.retain(|_, v| now - v.seen_at <= PROFILER_CACHE_TTL);
+            g.profiler_tracks.retain(|_, v| now - v.polled_at <= PROFILER_CACHE_TTL);
             (
                 g.ble_cache.values().cloned().collect::<Vec<_>>(),
-                g.profiler_cache.clone(),
+                g.profiler_tracks.clone(),
             )
         };
         let paired = match status {
@@ -404,14 +417,18 @@ impl MacBluetooth {
             _ => {
                 let mut list = read_iobluetooth_paired(now);
                 for obs in &mut list {
-                    if let Some(prof) = obs.classic_address.as_deref().and_then(|addr| profiler.get(addr)) {
-                        if prof.connected {
+                    if let Some(track) = obs.classic_address.as_deref().and_then(|addr| profiler.get(addr)) {
+                        if track.connected {
                             obs.connected = true;
-                            obs.seen_at = obs.seen_at.max(prof.seen_at);
-                        }
-                        if let Some(pr) = prof.rssi {
-                            obs.rssi = Some(pr);
-                            obs.seen_at = prof.seen_at;
+                            obs.seen_at = obs.seen_at.max(track.changed_at);
+                            if let Some(pr) = track.rssi {
+                                obs.rssi = Some(pr);
+                            }
+                        } else if track.confirmed_live && now - track.changed_at <= PROFILER_LIVE_TTL {
+                            if let Some(pr) = track.rssi {
+                                obs.rssi = Some(pr);
+                                obs.seen_at = obs.seen_at.max(track.changed_at);
+                            }
                         }
                     }
                 }
@@ -510,14 +527,88 @@ fn parse_system_profiler_bluetooth_json(json: &str, now: f64) -> HashMap<String,
                         continue;
                     };
                     let rssi = props.get("device_rssi").and_then(parse_profiler_rssi);
-                    if connected || rssi.is_some() {
-                        out.insert(addr, ProfilerReading { connected, rssi, seen_at: now });
+                    if connected {
+                        out.insert(addr, ProfilerReading { connected: true, rssi, seen_at: now });
+                    } else if let Some(r) = rssi {
+                        // macOS bluetoothd가 피어 통신을 잃어 펌웨어 0.0.0 · 제품 ID 없음으로 남은 항목은 죽은 캐시다.
+                        let fw = props.get("device_firmwareVersion").and_then(|v| v.as_str()).unwrap_or("");
+                        let has_product = props.get("device_productID").is_some();
+                        if fw == "0.0.0" && !has_product {
+                            continue;
+                        }
+                        out.insert(
+                            addr,
+                            ProfilerReading {
+                                connected: false,
+                                rssi: Some(r),
+                                seen_at: now,
+                            },
+                        );
                     }
                 }
             }
         }
     }
     out
+}
+
+fn update_profiler_tracks(
+    tracks: &mut HashMap<String, ProfilerTrack>,
+    fresh: HashMap<String, ProfilerReading>,
+    now: f64,
+) {
+    for (addr, track) in tracks.iter_mut() {
+        if !fresh.contains_key(addr) && track.connected {
+            track.connected = false;
+            track.confirmed_live = false;
+        }
+    }
+    tracks.retain(|addr, track| fresh.contains_key(addr) || now - track.polled_at <= PROFILER_CACHE_TTL);
+
+    for (addr, reading) in fresh {
+        if reading.connected {
+            tracks.insert(
+                addr,
+                ProfilerTrack {
+                    connected: true,
+                    rssi: reading.rssi,
+                    changed_at: reading.seen_at,
+                    confirmed_live: true,
+                    polled_at: now,
+                },
+            );
+            continue;
+        }
+        let Some(new_rssi) = reading.rssi else {
+            continue;
+        };
+        match tracks.get_mut(&addr) {
+            Some(prev) => {
+                prev.connected = false;
+                prev.polled_at = now;
+                if prev.rssi != Some(new_rssi) {
+                    prev.rssi = Some(new_rssi);
+                    prev.changed_at = reading.seen_at;
+                    prev.confirmed_live = true;
+                } else if now - prev.changed_at > PROFILER_LIVE_TTL {
+                    prev.confirmed_live = false;
+                }
+            }
+            None => {
+                // 비연결 기기의 첫 샘플은 고정 캐시일 수 있으므로 RSSI 변동이 관측된 뒤부터 실시간으로 인정한다.
+                tracks.insert(
+                    addr,
+                    ProfilerTrack {
+                        connected: false,
+                        rssi: Some(new_rssi),
+                        changed_at: reading.seen_at,
+                        confirmed_live: false,
+                        polled_at: now,
+                    },
+                );
+            }
+        }
+    }
 }
 
 fn query_system_profiler_bluetooth(now: f64) -> Option<HashMap<String, ProfilerReading>> {
@@ -536,7 +627,7 @@ fn refresh_profiler_cache(shared: &Arc<Mutex<BtShared>>) {
     let now = crate::macos::clocks().total;
     if let Some(map) = query_system_profiler_bluetooth(now) {
         let mut g = shared.lock().unwrap_or_else(|e| e.into_inner());
-        g.profiler_cache = map;
+        update_profiler_tracks(&mut g.profiler_tracks, map, now);
     }
 }
 
@@ -610,7 +701,13 @@ fn worker_loop(shared: Arc<Mutex<BtShared>>, ctrl: Arc<(Mutex<ScanControl>, Cond
                     h.stop_scan();
                     scanning = false;
                 }
-                shared.lock().unwrap_or_else(|e| e.into_inner()).profiler_cache.clear();
+                {
+                    let mut g = shared.lock().unwrap_or_else(|e| e.into_inner());
+                    for track in g.profiler_tracks.values_mut() {
+                        track.connected = false;
+                        track.confirmed_live = false;
+                    }
+                }
                 let _ = wait_for_change_or_timeout(&ctrl, None);
             }
             BluetoothScanMode::Radar => {
@@ -619,18 +716,14 @@ fn worker_loop(shared: Arc<Mutex<BtShared>>, ctrl: Arc<(Mutex<ScanControl>, Cond
                     scanning = true;
                 }
                 refresh_profiler_cache(&shared);
-                let _ = wait_for_change_or_timeout(&ctrl, Some(Duration::from_millis(2500)));
+                let _ = wait_for_change_or_timeout(&ctrl, Some(Duration::from_millis(2000)));
             }
             BluetoothScanMode::Background => {
-                h.start_scan();
-                scanning = true;
-                refresh_profiler_cache(&shared);
-                let (next_mode, _) = wait_for_change_or_timeout(&ctrl, Some(Duration::from_millis(3000)));
-                if next_mode != BluetoothScanMode::Background {
-                    continue;
+                if !scanning {
+                    h.start_scan();
+                    scanning = true;
                 }
-                h.stop_scan();
-                scanning = false;
+                refresh_profiler_cache(&shared);
                 let _ = wait_for_change_or_timeout(&ctrl, Some(Duration::from_millis(4000)));
             }
         }
@@ -639,8 +732,9 @@ fn worker_loop(shared: Arc<Mutex<BtShared>>, ctrl: Arc<(Mutex<ScanControl>, Cond
 
 #[cfg(test)]
 mod tests {
-    use super::parse_system_profiler_bluetooth_json;
+    use super::{parse_system_profiler_bluetooth_json, update_profiler_tracks, ProfilerReading, PROFILER_LIVE_TTL};
     use crate::{create, BluetoothScanMode};
+    use std::collections::HashMap;
     use std::time::Duration;
 
     #[test]
@@ -665,7 +759,16 @@ mod tests {
                 {
                   "heavyuser": {
                     "device_address": "64:6D:2F:A7:28:FC",
-                    "device_rssi": "-62"
+                    "device_firmwareVersion": "27.2.0",
+                    "device_productID": "0x7504",
+                    "device_rssi": "-55"
+                  }
+                },
+                {
+                  "Stale Off Phone": {
+                    "device_address": "22:33:44:55:66:77",
+                    "device_firmwareVersion": "0.0.0",
+                    "device_rssi": "-61"
                   }
                 },
                 {
@@ -686,21 +789,72 @@ mod tests {
         let parsed = parse_system_profiler_bluetooth_json(sample, 123.5);
         assert_eq!(parsed.len(), 3);
 
-        let phone = parsed.get("64:6d:2f:a7:28:fc").expect("비연결 아이폰 RSSI 포함");
+        let phone = parsed.get("64:6d:2f:a7:28:fc").expect("유효 펌웨어·제품ID 비연결 아이폰 포함");
         assert!(!phone.connected);
-        assert_eq!(phone.rssi, Some(-62));
+        assert_eq!(phone.rssi, Some(-55));
         assert_eq!(phone.seen_at, 123.5);
 
         let airpods = parsed.get("cc:22:fe:38:f9:c4").expect("연결 에어팟 정수 RSSI 포함");
         assert!(airpods.connected);
         assert_eq!(airpods.rssi, Some(-54));
+        assert_eq!(airpods.seen_at, 123.5);
 
         let no_rssi_conn = parsed.get("11:22:33:44:55:66").expect("RSSI 없는 연결 기기도 포함");
         assert!(no_rssi_conn.connected);
         assert_eq!(no_rssi_conn.rssi, None);
 
+        assert!(!parsed.contains_key("22:33:44:55:66:77"), "fw 0.0.0 + productID 없는 죽은 캐시 제외");
         assert!(!parsed.contains_key("aa:bb:cc:dd:ee:ff"), "무효 RSSI(0) 비연결 기기는 제외");
         assert!(!parsed.contains_key("e9:cc:6a:fd:81:c6"), "RSSI 없는 비연결 기기는 제외");
+    }
+
+    #[test]
+    fn profiler_tracker_distinguishes_live_and_frozen_rssi() {
+        let mut tracks = HashMap::new();
+        let phone = "64:6d:2f:a7:28:fc".to_string();
+        let pods = "cc:22:fe:38:f9:c4".to_string();
+
+        let mk = |connected: bool, rssi: Option<i16>, seen_at: f64| ProfilerReading {
+            connected,
+            rssi,
+            seen_at,
+        };
+
+        // 1. 처음 본 비연결 RSSI -61은 아직 변동이 없으므로 confirmed_live=false
+        update_profiler_tracks(
+            &mut tracks,
+            HashMap::from([(phone.clone(), mk(false, Some(-61), 100.0)), (pods.clone(), mk(true, Some(-54), 100.0))]),
+            100.0,
+        );
+        assert!(!tracks[&phone].confirmed_live);
+        assert!(tracks[&pods].confirmed_live);
+
+        // 2. 30초 뒤에도 -61로 고정되어 있으면 계속 confirmed_live=false
+        update_profiler_tracks(
+            &mut tracks,
+            HashMap::from([(phone.clone(), mk(false, Some(-61), 130.0)), (pods.clone(), mk(true, Some(-54), 130.0))]),
+            130.0,
+        );
+        assert!(!tracks[&phone].confirmed_live);
+        assert!(tracks[&pods].confirmed_live, "연결된 기기는 RSSI가 고정돼도 계속 유효");
+
+        // 3. RSSI가 -59 -> -55로 변하면 즉시 confirmed_live=true 및 changed_at 갱신
+        update_profiler_tracks(&mut tracks, HashMap::from([(phone.clone(), mk(false, Some(-59), 134.0))]), 134.0);
+        assert!(tracks[&phone].confirmed_live);
+        assert_eq!(tracks[&phone].changed_at, 134.0);
+
+        update_profiler_tracks(&mut tracks, HashMap::from([(phone.clone(), mk(false, Some(-55), 138.0))]), 138.0);
+        assert!(tracks[&phone].confirmed_live);
+        assert_eq!(tracks[&phone].changed_at, 138.0);
+
+        // 4. 이후 -55로 동결되어 PROFILER_LIVE_TTL(25초)이 지나면 만료(confirmed_live=false)
+        let expired_t = 138.0 + PROFILER_LIVE_TTL + 1.0;
+        update_profiler_tracks(
+            &mut tracks,
+            HashMap::from([(phone.clone(), mk(false, Some(-55), expired_t))]),
+            expired_t,
+        );
+        assert!(!tracks[&phone].confirmed_live);
     }
 
     #[test]
@@ -710,7 +864,7 @@ mod tests {
         let st = p.bluetooth_status();
         println!("bluetooth_status={st:?}");
         p.set_bluetooth_mode(BluetoothScanMode::Radar);
-        std::thread::sleep(Duration::from_secs(4));
+        std::thread::sleep(Duration::from_secs(6));
         let obs = p.bluetooth_observations();
         println!("observations_count={}", obs.len());
         for o in obs.iter().filter(|o| o.paired || o.name.is_some()).take(20) {

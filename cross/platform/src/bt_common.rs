@@ -26,18 +26,29 @@ fn clean_name(s: Option<&str>) -> Option<String> {
     s.map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned)
 }
 
-fn names_match_for_paired(paired_name: &str, ble_name: &str, paired_kind: BluetoothDeviceKind, ble_kind: BluetoothDeviceKind) -> bool {
+fn names_exact_match(paired_name: &str, ble_name: &str) -> bool {
+    let p = paired_name.trim().to_ascii_lowercase();
+    let b = ble_name.trim().to_ascii_lowercase();
+    !p.is_empty() && p == b
+}
+
+fn names_fuzzy_match(
+    paired_name: &str,
+    ble_name: &str,
+    paired_kind: BluetoothDeviceKind,
+    ble_kind: BluetoothDeviceKind,
+) -> bool {
     let p = paired_name.trim().to_ascii_lowercase();
     let b = ble_name.trim().to_ascii_lowercase();
     if p.is_empty() || b.is_empty() {
         return false;
     }
-    if p == b {
-        return true;
-    }
     // AirPods처럼 페어링 이름("AirPods Pro")이 BLE 광고 이름("Heavyuser’s AirPods Pro")에 포함되는 경우
-    if matches!(paired_kind, BluetoothDeviceKind::Audio | BluetoothDeviceKind::Phone | BluetoothDeviceKind::Band)
-        && (paired_kind == ble_kind || ble_kind == BluetoothDeviceKind::Other)
+    // (소유자 이름이 겹치는 다른 기기 오인을 막기 위해 두 기기 종류가 같을 때만 부분 일치를 허용한다)
+    if matches!(
+        paired_kind,
+        BluetoothDeviceKind::Audio | BluetoothDeviceKind::Phone | BluetoothDeviceKind::Band
+    ) && paired_kind == ble_kind
         && p.len() >= 5
         && b.len() >= 5
     {
@@ -60,7 +71,7 @@ fn shares_hw_identifier(a: &BluetoothObservation, b: &BluetoothObservation) -> b
     }
 }
 
-fn merge_pair(dst: &mut BluetoothObservation, dst_has_ble_rssi: &mut bool, src: BluetoothObservation) {
+fn merge_pair(dst: &mut BluetoothObservation, src: BluetoothObservation) {
     let dst_name = clean_name(dst.name.as_deref());
     let src_name = clean_name(src.name.as_deref());
     dst.name = match (dst_name, src_name) {
@@ -85,67 +96,56 @@ fn merge_pair(dst: &mut BluetoothObservation, dst_has_ble_rssi: &mut bool, src: 
 
     let src_has_rssi = src.rssi.and_then(BluetoothObservation::normalize_rssi).is_some();
     let dst_has_rssi = dst.rssi.and_then(BluetoothObservation::normalize_rssi).is_some();
-    // 아직 BLE RSSI를 받은 적 없는 페어링 항목이면 실시간 BLE 광고의 RSSI를 우선 채택하고,
-    // 이미 BLE RSSI가 있으면 더 최근(seen_at) 관측만 반영한다.
-    let take_src_rssi = if !src.paired && src_has_rssi {
-        if !*dst_has_ble_rssi {
-            true
-        } else {
-            src.seen_at >= dst.seen_at
-        }
-    } else {
-        src_has_rssi && !dst_has_rssi
-    };
+    let take_src_rssi = src_has_rssi && (!dst_has_rssi || src.seen_at >= dst.seen_at);
     if take_src_rssi {
         dst.rssi = src.rssi;
-        dst.seen_at = if !src.paired && !*dst_has_ble_rssi {
-            src.seen_at
-        } else {
-            dst.seen_at.max(src.seen_at)
-        };
-        if !src.paired {
-            *dst_has_ble_rssi = true;
-        }
-    } else if src.seen_at > dst.seen_at {
+    }
+    if src.seen_at > dst.seen_at {
         dst.seen_at = src.seen_at;
     }
 }
 
 /// BLE 광고 관측 목록과 OS 페어링 목록을 하나의 기기 목록으로 병합한다.
 pub fn merge_observations(ble: Vec<BluetoothObservation>, paired: Vec<BluetoothObservation>) -> Vec<BluetoothObservation> {
-    let mut out: Vec<(BluetoothObservation, bool)> = Vec::with_capacity(paired.len() + ble.len());
+    let mut out: Vec<BluetoothObservation> = Vec::with_capacity(paired.len() + ble.len());
 
     for mut p in paired {
         p.name = clean_name(p.name.as_deref());
-        if let Some((existing, has_ble)) = out.iter_mut().find(|(e, _)| shares_hw_identifier(e, &p)) {
-            merge_pair(existing, has_ble, p);
+        if let Some(existing) = out.iter_mut().find(|e| shares_hw_identifier(e, &p)) {
+            merge_pair(existing, p);
         } else {
-            out.push((p, false));
+            out.push(p);
         }
     }
 
     for mut b in ble {
         b.name = clean_name(b.name.as_deref());
-        if let Some((existing, has_ble)) = out.iter_mut().find(|(e, _)| shares_hw_identifier(e, &b)) {
-            merge_pair(existing, has_ble, b);
+        if let Some(existing) = out.iter_mut().find(|e| shares_hw_identifier(e, &b)) {
+            merge_pair(existing, b);
             continue;
         }
         if let Some(b_name) = b.name.as_deref() {
-            if let Some((existing, has_ble)) = out.iter_mut().find(|(e, _)| {
+            if let Some(existing) = out
+                .iter_mut()
+                .find(|e| e.paired && e.name.as_deref().is_some_and(|pn| names_exact_match(pn, b_name)))
+            {
+                merge_pair(existing, b);
+                continue;
+            }
+            if let Some(existing) = out.iter_mut().find(|e| {
                 e.paired
                     && e.name
                         .as_deref()
-                        .is_some_and(|pn| names_match_for_paired(pn, b_name, e.kind, b.kind))
+                        .is_some_and(|pn| names_fuzzy_match(pn, b_name, e.kind, b.kind))
             }) {
-                merge_pair(existing, has_ble, b);
+                merge_pair(existing, b);
                 continue;
             }
         }
-        let has_ble = !b.paired && b.rssi.and_then(BluetoothObservation::normalize_rssi).is_some();
-        out.push((b, has_ble));
+        out.push(b);
     }
 
-    out.into_iter().map(|(obs, _)| obs).collect()
+    out
 }
 
 #[cfg(test)]
@@ -216,5 +216,79 @@ mod tests {
         let band = merged.iter().find(|d| d.mac_address.as_deref() == Some("04:34:c3:64:6f:d1")).unwrap();
         assert!(!band.paired);
         assert_eq!(band.rssi, Some(-57));
+    }
+
+    #[test]
+    fn keeps_newer_profiler_rssi_over_older_ble() {
+        let paired = vec![mk_paired(
+            "64:6d:2f:a7:28:fc",
+            "heavyuser",
+            BluetoothDeviceKind::Phone,
+            Some(-56),
+            false,
+            120.0,
+        )];
+        let ble = vec![mk_ble("3B88C703", "heavyuser", BluetoothDeviceKind::Phone, None, -63, 110.0)];
+
+        let merged = merge_observations(ble, paired);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].rssi, Some(-56));
+        assert_eq!(merged[0].seen_at, 120.0);
+        assert_eq!(merged[0].ble_id.as_deref(), Some("3B88C703"));
+    }
+
+    #[test]
+    fn does_not_steal_iphone_ble_into_airpods_with_shared_owner_name() {
+        let paired = vec![
+            mk_paired(
+                "cc:22:fe:38:f9:c4",
+                "Heavyuser’s AirPods Pro",
+                BluetoothDeviceKind::Audio,
+                None,
+                false,
+                0.0,
+            ),
+            mk_paired(
+                "64:6d:2f:a7:28:fc",
+                "heavyuser",
+                BluetoothDeviceKind::Phone,
+                None,
+                false,
+                0.0,
+            ),
+        ];
+        let ble = vec![mk_ble(
+            "3B88C703",
+            "heavyuser",
+            BluetoothDeviceKind::Other,
+            None,
+            -55,
+            102.0,
+        )];
+
+        let merged = merge_observations(ble.clone(), paired);
+        assert_eq!(merged.len(), 2);
+
+        let airpods = merged.iter().find(|d| d.classic_address.as_deref() == Some("cc:22:fe:38:f9:c4")).unwrap();
+        assert_eq!(airpods.ble_id, None, "에어팟이 아이폰 BLE UUID를 납치하면 안 됨");
+        assert_eq!(airpods.rssi, None);
+
+        let iphone = merged.iter().find(|d| d.classic_address.as_deref() == Some("64:6d:2f:a7:28:fc")).unwrap();
+        assert_eq!(iphone.ble_id.as_deref(), Some("3B88C703"));
+        assert_eq!(iphone.rssi, Some(-55));
+
+        // 페어링 목록에 에어팟만 있더라도 kind=Other인 BLE "heavyuser"가 에어팟과 합쳐지면 안 됨
+        let only_airpods = vec![mk_paired(
+            "cc:22:fe:38:f9:c4",
+            "Heavyuser’s AirPods Pro",
+            BluetoothDeviceKind::Audio,
+            None,
+            false,
+            0.0,
+        )];
+        let separate = merge_observations(ble, only_airpods);
+        assert_eq!(separate.len(), 2);
+        assert_eq!(separate[0].ble_id, None);
+        assert_eq!(separate[1].ble_id.as_deref(), Some("3B88C703"));
     }
 }
