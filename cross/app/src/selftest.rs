@@ -14,14 +14,14 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use wifilock_core::{
-    BluetoothDeviceKind, BluetoothDeviceRule, BluetoothObservation, EngineState, ProximityRange, SettingsStore,
+    BluetoothDeviceKind, BluetoothDeviceRule, BluetoothObservation, EngineState, Lang, ProximityRange, SettingsStore,
     WiFiSnapshot, WiFiStatus,
 };
 
 use crate::engine;
 use crate::menu;
 use crate::state::{lock, state, FakeInputs};
-use crate::ui::{self, IconKind};
+use crate::ui::{self, BadgeUnit, IconKind, TrayBadge};
 use crate::views;
 
 #[derive(Serialize)]
@@ -475,35 +475,69 @@ impl SelfTest {
         let pending_seen = outs.iter().take(10).all(|r| r.lock_reason.is_none());
         self.check("시나리오: 낯선 와이파이 15초 확인 뒤 2분 규칙", policy.contains("2분") && pending_seen, policy);
 
-        // 메뉴 막대 남은 시간: 분 단위면 "2분"처럼, 초 단위면 "1:40"처럼 (윈도우 알림 영역에는 글자를 둘 수 없어 표시하지 않음)
+        // 메뉴 막대/트레이 아이콘 남은 시간: 맥·리눅스는 title("2분"/"1:40"), 윈도우·리눅스는 동적 숫자 배지도 검증한다.
         let remaining = match lock(&st.controller).status().state {
             EngineState::Counting { remaining, .. } => remaining,
             _ => 0.0,
         };
-        let title_with = |minutes: bool| {
+        let snap_with = |minutes: bool| {
             lock(&st.store).update(|x| {
                 x.show_countdown_in_menu_bar = true;
                 x.countdown_in_minutes = minutes;
             });
-            ui::snapshot(&st).title
+            let snap = ui::snapshot(&st);
+            (snap.title, snap.icon_badge)
         };
-        let in_minutes = title_with(true);
-        let in_seconds = title_with(false);
+        let (in_minutes, badge_min) = snap_with(true);
+        let (in_seconds, badge_sec) = snap_with(false);
+        // 2자리 배지는 99초 이하에서만 초 단위(Seconds)를 쓰고, 100초 이상은 분 올림(Minutes)을 쓴다.
+        let mut sec_settings = lock(&st.store).settings().clone();
+        sec_settings.show_countdown_in_menu_bar = true;
+        sec_settings.countdown_in_minutes = false;
+        let badge_sub99 = TrayBadge::compute(
+            &EngineState::Counting { remaining: 90.0, timeout: 120.0 },
+            &sec_settings,
+            Lang::Ko,
+            !cfg!(target_os = "macos"),
+        );
         lock(&st.store).update(|x| {
             x.show_countdown_in_menu_bar = false;
             x.countdown_in_minutes = false;
         });
-        let title_ok = if cfg!(target_os = "windows") {
-            in_minutes.is_none() && in_seconds.is_none()
+        let badge_sec_expected_ok = if remaining > 99.0 {
+            matches!(badge_sec, TrayBadge::Countdown { unit: BadgeUnit::Minutes, .. })
         } else {
+            matches!(badge_sec, TrayBadge::Countdown { unit: BadgeUnit::Seconds, .. })
+        };
+        let title_ok = if cfg!(target_os = "windows") {
+            let min_img = ui::tray_image_for_badge(&badge_min);
+            let sec_img = ui::tray_image_for_badge(&badge_sub99);
+            in_minutes.is_none()
+                && in_seconds.is_none()
+                && matches!(badge_min, TrayBadge::Countdown { unit: BadgeUnit::Minutes, .. })
+                && badge_sec_expected_ok
+                && matches!(badge_sub99, TrayBadge::Countdown { ref text, unit: BadgeUnit::Seconds, .. } if text == "90")
+                && min_img.width() == 64
+                && sec_img.width() == 64
+        } else {
+            let badge_ok = if cfg!(target_os = "linux") {
+                matches!(badge_min, TrayBadge::Countdown { unit: BadgeUnit::Minutes, .. })
+                    && badge_sec_expected_ok
+                    && matches!(badge_sub99, TrayBadge::Countdown { ref text, unit: BadgeUnit::Seconds, .. } if text == "90")
+            } else {
+                matches!(badge_min, TrayBadge::Static(IconKind::Active))
+                    && matches!(badge_sec, TrayBadge::Static(IconKind::Active))
+                    && matches!(badge_sub99, TrayBadge::Static(IconKind::Active))
+            };
             remaining > 60.0
                 && in_minutes.as_deref().is_some_and(|t| t.ends_with('분') && !t.contains(':'))
                 && in_seconds.as_deref().is_some_and(|t| t.contains(':'))
+                && badge_ok
         };
         self.check(
             "메뉴 막대 남은 시간: 분 단위·초 단위",
             title_ok,
-            format!("남은 {remaining:.0}초 → 분 단위 {in_minutes:?} · 초 단위 {in_seconds:?}"),
+            format!("남은 {remaining:.0}초 → 분 {in_minutes:?}/{badge_min:?} · 초 {in_seconds:?}/{badge_sec:?}"),
         );
 
         // 경고 창은 잠금과 먼 동안에는 두지 않는다. (빌드 서버처럼 시작할 때 이미 자리비움이 길어
@@ -596,14 +630,29 @@ impl SelfTest {
                 && has("status-held-hint"),
             format!("{s} / {holders_line}"),
         );
-        // 아이콘은 "켜진 화면 + 열린 자물쇠"로 바뀌고, 맥·리눅스는 남은 시간 표시를 꺼 두었어도 아이콘 옆에 글자로 알린다.
-        let shown = lock(&st.ui).as_ref().map(|u| (u.icon, u.title.clone(), u.tooltip.clone()));
-        let (icon, title, tooltip) = shown.unwrap_or((IconKind::Active, None, String::new()));
-        let title_ok = if cfg!(target_os = "windows") { title.is_none() } else { title.as_deref() == Some("잠금 보류") };
+        // 아이콘은 "켜진 화면 + 열린 자물쇠"로 바뀌고, 맥·리눅스는 title 글자로, 윈도우·리눅스는 동적 보류 배지로 알린다.
+        let shown = lock(&st.ui)
+            .as_ref()
+            .map(|u| (u.icon, u.title.clone(), u.tooltip.clone(), u.icon_badge.clone()));
+        let (icon, title, tooltip, badge) = shown.unwrap_or((
+            IconKind::Active,
+            None,
+            String::new(),
+            TrayBadge::Static(IconKind::Active),
+        ));
+        let title_ok = if cfg!(target_os = "windows") {
+            title.is_none()
+                && matches!(badge, TrayBadge::Held { .. })
+                && ui::tray_image_for_badge(&badge).width() == 64
+        } else if cfg!(target_os = "linux") {
+            title.as_deref() == Some("잠금 보류") && matches!(badge, TrayBadge::Held { .. })
+        } else {
+            title.as_deref() == Some("잠금 보류")
+        };
         self.check(
             "보류 중 아이콘·메뉴 막대 글자·도움말",
             icon == IconKind::Held && title_ok && tooltip.contains("잠기지 않음") && tooltip.contains("동영상 재생기"),
-            format!("{icon:?} / {title:?} / {tooltip}"),
+            format!("{icon:?} / {title:?} / {badge:?} / {tooltip}"),
         );
         self.set_fake(|f| {
             f.holders.clear();
@@ -611,9 +660,12 @@ impl SelfTest {
         });
         self.tick();
         let (_, _, _, _, ids) = self.menu_texts();
-        let shown = lock(&st.ui).as_ref().map(|u| (u.icon, u.title.clone()));
-        let back = shown.as_ref().is_some_and(|(icon, title)| *icon == IconKind::Active && title.is_none())
-            && !ids.iter().any(|i| i == "status-holders" || i == "status-held-hint");
+        let shown = lock(&st.ui)
+            .as_ref()
+            .map(|u| (u.icon, u.title.clone(), u.icon_badge.clone()));
+        let back = shown.as_ref().is_some_and(|(icon, title, badge)| {
+            *icon == IconKind::Active && title.is_none() && *badge == TrayBadge::Static(IconKind::Active)
+        }) && !ids.iter().any(|i| i == "status-holders" || i == "status-held-hint");
         self.check("보류가 끝나면 아이콘·메뉴 원래대로", back, format!("{shown:?}"));
 
         // 블루투스 근접 보류 (가까움 / 중간 가까움 / 먼 거리 3단계 및 이탈 유예)

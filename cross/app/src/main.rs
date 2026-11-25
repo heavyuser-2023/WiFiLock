@@ -8,6 +8,7 @@ mod menu;
 mod options;
 mod selftest;
 mod state;
+mod tray_badge;
 mod ui;
 mod views;
 
@@ -237,7 +238,7 @@ fn main() {
             let (menu, handles) = menu::build(&handle, &first)?;
             *state::lock(&st.menu) = Some(handles);
             let tray = TrayIconBuilder::with_id(ui::TRAY_ID)
-                .icon(ui::tray_image(first.icon))
+                .icon(ui::tray_image_for_badge(&first.icon_badge))
                 .icon_as_template(cfg!(target_os = "macos"))
                 .tooltip(&first.tooltip)
                 .menu(&menu)
